@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Haushaltsbuch</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#080e1a;font-family:system-ui,-apple-system,sans-serif;color:#e2e8f0;}
+  select option{background:#101828;color:#e2e8f0;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-track{background:#080e1a;}
+  ::-webkit-scrollbar-thumb{background:#1e2d45;border-radius:4px;}
+  input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── TOKENS ──────────────────────────────────────────────────────
+const C = {
+  bg:"#080e1a", card:"#101828", cardAlt:"#0c1422", border:"#1e2d45",
+  gold:"#c9a227", goldLight:"#e8c04a", green:"#22c55e", red:"#f87171",
+  text:"#e2e8f0", muted:"#64748b", mutedLight:"#94a3b8",
+};
+const GOAL_COLORS=["#c9a227","#3b82f6","#8b5cf6","#22c55e","#f97316","#ec4899","#14b8a6","#ef4444"];
+const GOAL_ICONS=["🏠","🚗","🏖️","🛡️","📱","🎓","✈️","🌍","💒","🏋️","🐕","🎮","💍","🎸","📷"];
+const INCOME_CAT=["Gehalt","Nebeneinkommen","Freiberuflich","Bonus","Sonstiges"];
+const EXPENSE_CAT=["Miete / Wohnen","Lebensmittel","Transport","Versicherungen","Freizeit","Kleidung","Bildung","Gesundheit","Haushalt","Sonstiges"];
+const EMOJI={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
+
+// ── HELPERS ──────────────────────────────────────────────────────
+const fmtAmt   = n=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtShort = n=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
+const fmtMonth = m=>new Date(m+"-01").toLocaleDateString("de-DE",{month:"long",year:"numeric"});
+const todayStr = ()=>new Date().toISOString().slice(0,10);
+const thisMonth= ()=>new Date().toISOString().slice(0,7);
+const uid      = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+
+// ── AUTO-KATEGORISIERUNG ─────────────────────────────────────────
+function autoCategory(note, type){
+  const n=(note||"").toLowerCase();
+  if(type==="income"){
+    if(/gehalt|lohn|salary|payroll/.test(n))       return "Gehalt";
+    if(/nebeneinkommen|freelance|honorar/.test(n)) return "Nebeneinkommen";
+    if(/bonus|prämie|gratifikation/.test(n))       return "Bonus";
+    return "Sonstiges";
+  }
+  if(/rewe|lidl|aldi|edeka|penny|netto|kaufland|dm-|rossmann|müller|bäcker|metzger|supermarkt|lebensmittel/.test(n)) return "Lebensmittel";
+  if(/miete|warmmiete|nebenkosten|hausgeld|strom|gas |wasser |gez|rundfunk/.test(n))                               return "Miete / Wohnen";
+  if(/tankstelle|aral|shell|bp |total |esso|jet |db |hvv|mvv|bvg|rnv|sbahn|ubahn|öpnv|parken|parkhaus/.test(n))   return "Transport";
+  if(/versicherung|allianz|huk|axa|generali|ergo|signal|debeka/.test(n))                                          return "Versicherungen";
+  if(/netflix|spotify|amazon prime|disney|apple|google play|youtube|kino|konzert|theater|steam|gaming/.test(n))   return "Freizeit";
+  if(/zalando|h&m|zara|c&a|primark|about you|kleidung|schuhe|mode/.test(n))                                      return "Kleidung";
+  if(/schule|uni |kurs|bildung|bücher|volkshochschule|weiterbildung|seminar/.test(n))                             return "Bildung";
+  if(/apotheke|arzt|krankenhaus|medikament|zahnarzt|physiotherapie|optiker/.test(n))                              return "Gesundheit";
+  if(/ikea|bauhaus|obi |hornbach|haushalt|möbel|media markt|saturn/.test(n))                                      return "Haushalt";
+  return "Sonstiges";
+}
+
+// ── CSV PARSE ────────────────────────────────────────────────────
+function parseCSV(text){
+  const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
+  const sep=lines[0].split(";").length>lines[0].split(",").length?";":",";
+  function splitLine(l){const res=[];let cur="",inQ=false;for(let ch of l){if(ch==='"'){inQ=!inQ;}else if(ch===sep&&!inQ){res.push(cur.trim());cur="";}else{cur+=ch;}}res.push(cur.trim());return res;}
+  const headers=splitLine(lines[0]).map(h=>h.replace(/"/g,"").trim());
+  const rows=lines.slice(1).map(l=>{const cells=splitLine(l);return headers.reduce((o,h,i)=>{o[h]=(cells[i]||"").replace(/"/g,"").trim();return o;},{});}).filter(r=>Object.values(r).some(v=>v));
+  return{headers,rows};
+}
+function parseAmount(s=""){
+  const c=s.replace(/[€$\s]/g,"");
+  if(c.includes(",")&&c.includes("."))return parseFloat(c.replace(/\./g,"").replace(",","."));
+  if(c.includes(","))return parseFloat(c.replace(",","."));
+  return parseFloat(c);
+}
+function parseDate(s=""){
+  const dm=s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if(dm)return`${dm[3]}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`;
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+  return todayStr();
+}
+function autoDetect(headers){
+  return{
+    date:  headers.find(h=>/datum|date|buchung|wert|time/i.test(h))||"",
+    amount:headers.find(h=>/betrag|amount|summe|kredit|soll|haben/i.test(h))||"",
+    note:  headers.find(h=>/beschreibung|verwendung|reference|typ|type|name|empf/i.test(h))||"",
+  };
+}
+
+// ── STYLES ───────────────────────────────────────────────────────
+const IS={width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",WebkitAppearance:"none",boxSizing:"border-box"};
+const INIT_GOALS=[{id:"g1",name:"Immobilie Mannheim",icon:"🏠",color:"#c9a227",target:50000,saved:0}];
+
+// ── COMPONENTS ───────────────────────────────────────────────────
+function StatCard({label,amount,color,sign}){
+  return <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+    <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>{label}</div>
+    <div style={{fontSize:18,fontWeight:900,color}}>{sign}€{fmtShort(amount)}</div>
+  </div>;
+}
+
+function Overlay({title,children,onClose}){
+  return <div onClick={e=>{if(e.target===e.currentTarget)onClose();}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+    <div style={{background:C.card,width:"100%",maxWidth:520,borderRadius:20,padding:"24px 22px 36px",border:`1px solid ${C.border}`,maxHeight:"90vh",overflowY:"auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div style={{fontWeight:800,fontSize:17}}>{title}</div>
+        <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:28,cursor:"pointer",lineHeight:1}}>×</button>
+      </div>
+      {children}
+    </div>
+  </div>;
+}
+
+function Field({label,children}){
+  return <div style={{marginTop:14}}>
+    <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>{label}</div>
+    {children}
+  </div>;
+}
+
+// ── SIDEBAR CONTENT (used in both drawer + desktop sidebar) ──────
+function SidebarContent({tab,setTab,bal,inc,exp,month,goals,totalSaved,totalTarget,onNav,onImport,onExport}){
+  return <>
+    <div style={{paddingTop:8}}>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,padding:"8px 18px 6px"}}>Navigation</div>
+      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"]].map(([id,ico,lbl,sub])=>
+        <button key={id} onClick={()=>onNav(id)} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:tab===id?"#162030":"transparent",border:"none",borderLeft:tab===id?`3px solid ${C.gold}`:"3px solid transparent",color:tab===id?C.gold:C.text,cursor:"pointer",textAlign:"left"}}>
+          <span style={{fontSize:19,width:26,textAlign:"center"}}>{ico}</span>
+          <div><div style={{fontSize:13,fontWeight:tab===id?700:500}}>{lbl}</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>{sub}</div></div>
+        </button>
+      )}
+      <div style={{borderTop:`1px solid ${C.border}`,margin:"6px 0"}}/>
+      <button onClick={onImport} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:"transparent",border:"none",borderLeft:"3px solid transparent",color:C.text,cursor:"pointer",textAlign:"left"}}>
+        <span style={{fontSize:19,width:26,textAlign:"center"}}>📂</span>
+        <div><div style={{fontSize:13,fontWeight:500}}>CSV importieren</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>Kontoauszug einlesen</div></div>
+      </button>
+      <button onClick={onExport} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:"transparent",border:"none",borderLeft:"3px solid transparent",color:C.text,cursor:"pointer",textAlign:"left"}}>
+        <span style={{fontSize:19,width:26,textAlign:"center"}}>💾</span>
+        <div><div style={{fontSize:13,fontWeight:500}}>CSV exportieren</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>Alle Buchungen speichern</div></div>
+      </button>
+    </div>
+
+    <div style={{padding:"14px 18px",borderTop:`1px solid ${C.border}`,marginTop:8}}>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:10}}>{fmtMonth(month)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+        <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EINNAHMEN</div><div style={{fontSize:14,fontWeight:800,color:C.green}}>+€{fmtShort(inc)}</div></div>
+        <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>AUSGABEN</div><div style={{fontSize:14,fontWeight:800,color:C.red}}>-€{fmtShort(exp)}</div></div>
+      </div>
+      <div style={{background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+        <div style={{fontSize:9,color:C.muted,marginBottom:3}}>BILANZ</div>
+        <div style={{fontSize:16,fontWeight:900,color:bal>=0?C.green:C.red}}>{bal>=0?"+":"-"}€{fmtShort(Math.abs(bal))}</div>
+      </div>
+    </div>
+
+    {goals.filter(g=>g.saved>=g.target).length>0&&
+      <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{fontSize:9,color:"#4ade80",textTransform:"uppercase",letterSpacing:1.5,marginBottom:10}}>🏆 Erreichte Ziele</div>
+        {goals.filter(g=>g.saved>=g.target).map(g=>
+          <div key={g.id} style={{background:"#071a10",border:"1px solid #1a4020",borderRadius:10,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{g.icon}</span>
+            <div><div style={{fontWeight:700,fontSize:13,color:"#4ade80"}}>{g.name}</div><div style={{fontSize:11,color:"#86efac",marginTop:2}}>Ziel erreicht! 🎉</div></div>
+          </div>
+        )}
+      </div>
+    }
+
+    {goals.filter(g=>g.saved<g.target).length>0&&
+      <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:12}}>Aktive Sparziele</div>
+        {goals.filter(g=>g.saved<g.target).map(g=>{
+          const p=g.target>0?Math.min((g.saved/g.target)*100,100):0;
+          return <div key={g.id} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+              <span style={{fontSize:12,color:C.text}}>{g.icon} {g.name}</span>
+              <span style={{fontSize:11,color:g.color,fontWeight:700}}>{p.toFixed(0)}%</span>
+            </div>
+            <div style={{height:5,background:C.border,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${p}%`,background:g.color,borderRadius:3}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+              <span style={{fontSize:10,color:g.color,fontWeight:600}}>€{fmtShort(g.saved)}</span>
+              <span style={{fontSize:10,color:C.muted}}>/ €{fmtShort(g.target)}</span>
+            </div>
+          </div>;
+        })}
+      </div>
+    }
+
+    <div style={{marginTop:"auto",padding:"14px 18px",borderTop:`1px solid ${C.border}`}}>
+      <div style={{fontSize:10,color:C.muted,textAlign:"center",lineHeight:1.6}}>
+        Dein Weg zur Immobilie 🏠<br/>
+        <span style={{color:C.gold,fontWeight:700}}>€{totalSaved.toLocaleString("de-DE")}</span>
+        <span style={{color:C.mutedLight}}> von €{totalTarget.toLocaleString("de-DE")}</span>
+      </div>
+    </div>
+  </>;
+}
+
+// ── MAIN ─────────────────────────────────────────────────────────
+function App(){
+  const [entries,     setEntries]    = useState([]);
+  const [goals,       setGoals]      = useState(INIT_GOALS);
+  const [month,       setMonth]      = useState(thisMonth());
+  const [tab,         setTab]        = useState("overview");
+  const [showAdd,     setShowAdd]    = useState(false);
+  const [showGoalDlg, setShowGoalDlg]= useState(false);
+  const [editId,      setEditId]     = useState(null);
+  const [loading,     setLoading]    = useState(true);
+  const [toast,       setToast]      = useState(null);
+  const [showDrawer,  setShowDrawer] = useState(false);
+  const [showImport,  setShowImport] = useState(false);
+  const [csvStep,     setCsvStep]    = useState("upload");
+  const [csvHeaders,  setCsvHeaders] = useState([]);
+  const [csvRaw,      setCsvRaw]     = useState([]);
+  const [csvMap,      setCsvMap]     = useState({date:"",amount:"",note:""});
+  const [csvPreview,  setCsvPreview] = useState([]);
+  const [windowWidth, setWindowWidth]= useState(window.innerWidth);
+  const fileRef = useRef(null);
+  const [form,  setForm]  = useState({type:"expense",category:"",amount:"",note:"",date:todayStr()});
+  const [gForm, setGForm] = useState({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});
+
+  const isMobile = windowWidth < 768;
+
+  useEffect(()=>{
+    load();
+    const onResize=()=>setWindowWidth(window.innerWidth);
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
+
+  const load=()=>{
+    const _e=localStorage.getItem("hb_e");if(_e)try{setEntries(JSON.parse(_e));}catch{}
+    const _g=localStorage.getItem("hb_goals");if(_g)try{setGoals(JSON.parse(_g));}catch{}
+    setLoading(false);
+  };
+  const saveE=arr=>{setEntries(arr);try{localStorage.setItem("hb_e",JSON.stringify(arr));}catch{}};
+  const saveG=arr=>{setGoals(arr);try{localStorage.setItem("hb_goals",JSON.stringify(arr));}catch{}};
+  const pop=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
+
+  const addEntry=()=>{
+    if(!form.amount||!form.category)return;
+    const e={...form,id:uid(),amount:parseFloat(form.amount)};
+    saveE([...entries,e]);setShowAdd(false);
+    setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
+    pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
+  };
+  const delEntry=id=>{saveE(entries.filter(e=>e.id!==id));pop("🗑️ Gelöscht");};
+
+  const openNew=()=>{setEditId(null);setGForm({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});setShowGoalDlg(true);};
+  const openEdit=g=>{setEditId(g.id);setGForm({name:g.name,icon:g.icon,color:g.color,target:String(g.target),saved:String(g.saved)});setShowGoalDlg(true);};
+  const saveGoal=()=>{
+    if(!gForm.name||!gForm.target)return;
+    let arr;
+    if(editId){arr=goals.map(g=>g.id===editId?{...g,...gForm,target:parseFloat(gForm.target),saved:gForm.saved!==""?parseFloat(gForm.saved):g.saved}:g);pop("✅ Ziel aktualisiert");}
+    else{arr=[...goals,{id:"g"+uid(),...gForm,target:parseFloat(gForm.target),saved:gForm.saved?parseFloat(gForm.saved):0}];pop("🎯 Neues Ziel!");}
+    saveG(arr);setShowGoalDlg(false);
+  };
+  const delGoal=id=>{if(goals.length<=1){pop("❌ Mindestens ein Ziel");return;}saveG(goals.filter(g=>g.id!==id));pop("🗑️ Ziel gelöscht");};
+  const addSaved=(id,delta)=>{saveG(goals.map(g=>g.id===id?{...g,saved:Math.max(0,g.saved+delta)}:g));pop(`+€${fmtShort(delta)} eingetragen 💰`);};
+
+  const handleFile=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{const{headers,rows}=parseCSV(ev.target.result);setCsvHeaders(headers);setCsvRaw(rows);setCsvMap(autoDetect(headers));setCsvStep("map");};
+    reader.readAsText(file,"UTF-8");
+  };
+  const buildPreview=()=>{
+    const prev=csvRaw.slice(0,5).map(row=>{
+      const amt=parseAmount(row[csvMap.amount]||"0");
+      if(isNaN(amt)||amt===0)return null;
+      const note=row[csvMap.note]||"";
+      const type=amt>=0?"income":"expense";
+      return{date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
+    }).filter(Boolean);
+    setCsvPreview(prev);setCsvStep("preview");
+  };
+  const importAll=()=>{
+    const newE=csvRaw.map(row=>{
+      const amt=parseAmount(row[csvMap.amount]||"0");
+      if(isNaN(amt)||amt===0)return null;
+      const note=row[csvMap.note]||"";
+      const type=amt>=0?"income":"expense";
+      return{id:uid(),date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
+    }).filter(Boolean);
+    saveE([...entries,...newE]);
+    setShowImport(false);setCsvStep("upload");setCsvRaw([]);setCsvHeaders([]);
+    pop(`✅ ${newE.length} Transaktionen importiert!`);
+  };
+  const resetImport=()=>{setCsvStep("upload");setCsvRaw([]);setCsvHeaders([]);if(fileRef.current)fileRef.current.value="";};
+
+  const exportCSV=()=>{
+    if(entries.length===0){pop("❌ Keine Buchungen vorhanden");return;}
+    const bom='\ufeff';
+    const headers=["Datum","Typ","Kategorie","Betrag","Notiz"];
+    const rows=entries.map(e=>[
+      e.date?e.date.split("-").reverse().join("."):"",
+      e.type==="income"?"Einnahme":"Ausgabe",
+      e.category||"",
+      (e.type==="expense"?"-":"")+e.amount.toFixed(2).replace(".",","),
+      e.note||""
+    ]);
+    const csv=bom+[headers,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;a.download=`haushaltsbuch_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+    pop(`✅ ${entries.length} Buchungen exportiert!`);
+  };
+
+  const shiftMonth=d=>{const dt=new Date(month+"-01");dt.setMonth(dt.getMonth()+d);setMonth(dt.toISOString().slice(0,7));};
+  const openImport=()=>{setShowImport(true);setCsvStep("upload");setShowDrawer(false);};
+
+  const mv       =entries.filter(e=>e.date?.startsWith(month));
+  const inc      =mv.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+  const exp      =mv.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+  const bal      =inc-exp;
+  const sparPct  =inc>0?(bal/inc)*100:null;
+  const byCat    =mv.filter(e=>e.type==="expense").reduce((a,e)=>{a[e.category]=(a[e.category]||0)+e.amount;return a;},{});
+  const catSorted=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  const sortedMv =[...mv].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const totalSaved =goals.reduce((s,g)=>s+g.saved,0);
+  const totalTarget=goals.reduce((s,g)=>s+g.target,0);
+  const totalPct   =totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
+
+  if(loading)return <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Lade Daten...</div>;
+
+  const sidebarProps={tab,setTab,bal,inc,exp,month,goals,totalSaved,totalTarget,onNav:id=>{setTab(id);setShowDrawer(false);},onImport:openImport,onExport:()=>{setShowDrawer(false);exportCSV();}};
+
+  return <div style={{background:C.bg,minHeight:"100vh",color:C.text}}>
+
+    {/* TOAST */}
+    {toast&&<div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:"#1a2a40",border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 22px",color:C.text,fontWeight:600,fontSize:13,zIndex:1100,whiteSpace:"nowrap",boxShadow:"0 4px 24px rgba(0,0,0,0.5)"}}>{toast}</div>}
+
+    {/* ── HEADER (full width) ── */}
+    <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,padding:isMobile?"16px 16px 14px":"18px 28px 16px"}}>
+      <div style={{maxWidth:isMobile?480:1200,margin:"0 auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:isMobile?0:16}}>
+            {isMobile&&<button onClick={()=>setShowDrawer(true)} style={{background:"transparent",border:`1px solid ${C.border}`,width:40,height:40,borderRadius:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,padding:0,marginRight:12}}>
+              <span style={{display:"block",width:16,height:2,background:C.gold,borderRadius:1}}/>
+              <span style={{display:"block",width:12,height:2,background:C.gold,borderRadius:1}}/>
+              <span style={{display:"block",width:16,height:2,background:C.gold,borderRadius:1}}/>
+            </button>}
+            <div>
+              <div style={{fontSize:10,color:C.gold,letterSpacing:3,textTransform:"uppercase",marginBottom:2}}>Mein</div>
+              <div style={{fontSize:isMobile?19:24,fontWeight:900,letterSpacing:-0.5}}>Haushaltsbuch</div>
+            </div>
+          </div>
+          {!isMobile&&<div style={{display:"flex",gap:10}}>
+            <button onClick={openImport} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.mutedLight,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>📂 Importieren</button>
+            <button onClick={exportCSV}  style={{background:"transparent",border:`1px solid ${C.green}55`,color:C.green,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>💾 Exportieren</button>
+            <button onClick={openNew}    style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Neues Ziel</button>
+          </div>}
+        </div>
+        {/* Progress bar */}
+        <div style={{background:C.bg,borderRadius:14,padding:"13px 16px",border:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+            <span style={{fontSize:11,color:C.mutedLight}}>💰 Gesamt-Sparfortschritt</span>
+            <span style={{fontSize:12,fontWeight:800,color:C.gold}}>{totalPct.toFixed(1)}%</span>
+          </div>
+          <div style={{height:10,background:C.border,borderRadius:5,overflow:"hidden",display:"flex",gap:1}}>
+            {goals.map(g=>{const w=totalTarget>0?(g.saved/totalTarget)*100:0;return w>0?<div key={g.id} style={{height:"100%",width:`${w}%`,background:g.color,flexShrink:0}}/>:null;})}
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"7px 20px",marginTop:10}}>
+            {goals.map(g=><div key={g.id} style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:9,height:9,borderRadius:"50%",background:g.color}}/>
+              <span style={{fontSize:11,color:C.mutedLight}}>{g.icon} {g.name}</span>
+              <span style={{fontSize:11,color:g.color,fontWeight:700}}>€{fmtShort(g.saved)}</span>
+            </div>)}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:11,color:C.green,fontWeight:800}}>€{totalSaved.toLocaleString("de-DE")} gespart</span>
+            <span style={{fontSize:11,color:C.muted}}>Ziel: €{totalTarget.toLocaleString("de-DE")}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* ── BODY ── */}
+    <div style={{display:"flex",maxWidth:isMobile?480:1200,margin:"0 auto"}}>
+
+      {/* DESKTOP SIDEBAR */}
+      {!isMobile&&<div style={{width:260,flexShrink:0,borderRight:`1px solid ${C.border}`,minHeight:"calc(100vh - 160px)",background:"#0b1422",overflowY:"auto",position:"sticky",top:0,height:"calc(100vh - 160px)"}}>
+        <SidebarContent {...sidebarProps}/>
+      </div>}
+
+      {/* MAIN CONTENT */}
+      <div style={{flex:1,minWidth:0}}>
+        {/* Month nav */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:isMobile?"10px 16px":"12px 28px",background:C.cardAlt,borderBottom:`1px solid ${C.border}`}}>
+          <button onClick={()=>shiftMonth(-1)} style={{background:C.border,border:"none",color:C.text,padding:"8px 20px",borderRadius:9,cursor:"pointer",fontWeight:700}}>←</button>
+          <span style={{fontWeight:700,fontSize:15}}>{fmtMonth(month)}</span>
+          <button onClick={()=>shiftMonth(1)} style={{background:C.border,border:"none",color:C.text,padding:"8px 20px",borderRadius:9,cursor:"pointer",fontWeight:700}}>→</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",background:C.card,borderBottom:`1px solid ${C.border}`}}>
+          {[["overview","📊 Übersicht"],["list","📋 Buchungen"],["cats","📈 Kategorien"],["goals","🎯 Ziele"]].map(([id,lbl])=>
+            <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"13px 0",background:"none",border:"none",borderBottom:tab===id?`2px solid ${C.gold}`:"2px solid transparent",color:tab===id?C.gold:C.muted,fontWeight:tab===id?700:400,fontSize:isMobile?10:12,cursor:"pointer"}}>{lbl}</button>
+          )}
+        </div>
+
+        {/* Content */}
+        <div style={{padding:isMobile?14:28,paddingBottom:100}}>
+
+          {/* ÜBERSICHT */}
+          {tab==="overview"&&<>
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${isMobile?3:3},1fr)`,gap:isMobile?10:16,marginBottom:isMobile?14:20}}>
+              <StatCard label="Einnahmen" amount={inc} color={C.green} sign="+"/>
+              <StatCard label="Ausgaben" amount={exp} color={C.red} sign="-"/>
+              <StatCard label="Bilanz" amount={Math.abs(bal)} color={bal>=0?C.green:C.red} sign={bal>=0?"+":"-"}/>
+            </div>
+            {sparPct!==null
+              ?<div style={{background:C.card,borderRadius:14,padding:isMobile?16:22,border:`1px solid ${C.border}`,marginBottom:isMobile?14:20}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:6}}>💡 Sparquote diesen Monat</div>
+                <div style={{display:"flex",alignItems:"baseline",gap:14}}>
+                  <div style={{fontSize:isMobile?38:52,fontWeight:900,color:sparPct>=20?C.goldLight:sparPct>=0?C.mutedLight:C.red,letterSpacing:-2}}>{sparPct.toFixed(0)}%</div>
+                  <div style={{fontSize:13,color:C.muted,lineHeight:1.6}}>{sparPct>=20?"Stark! Weiter so! 💪":sparPct>=0?"Solide – noch Luft nach oben.":"⚠️ Mehr ausgegeben als eingenommen!"}</div>
+                </div>
+                {bal>0&&<div style={{marginTop:10,fontSize:13,color:C.green}}>+€{fmtAmt(bal)} gespart diesen Monat</div>}
+              </div>
+              :<div style={{background:C.card,borderRadius:14,padding:isMobile?16:22,border:`1px solid ${C.border}`,marginBottom:isMobile?14:20,textAlign:"center"}}>
+                <div style={{fontSize:36,marginBottom:8}}>📭</div>
+                <div style={{color:C.muted,fontSize:14}}>Noch keine Buchungen diesen Monat</div>
+              </div>}
+            <div style={{background:"#071a10",border:"1px solid #1a4020",borderRadius:14,padding:isMobile?14:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#4ade80",marginBottom:8}}>💡 Tipp</div>
+              <div style={{fontSize:13,color:"#86efac",lineHeight:1.75}}>
+                {bal>0?<>Diesen Monat hast du <strong style={{color:"#4ade80"}}>€{fmtAmt(bal)}</strong> übrig – verteile es auf deine Sparziele!</>:"Trage Einkommen und Ausgaben ein oder importiere per CSV."}
+              </div>
+            </div>
+          </>}
+
+          {/* BUCHUNGEN */}
+          {tab==="list"&&<>
+            {isMobile&&<div style={{display:"flex",gap:8,marginBottom:14}}>
+              <button onClick={openImport} style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:"#0d1a2e",border:`1px dashed ${C.gold}55`,borderRadius:12,cursor:"pointer",color:C.gold}}>
+                <span>📂</span><div style={{textAlign:"left"}}><div style={{fontWeight:700,fontSize:12}}>Importieren</div><div style={{fontSize:10,color:C.muted}}>CSV einlesen</div></div>
+              </button>
+              <button onClick={exportCSV} style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:"#0d1a2e",border:`1px dashed ${C.green}55`,borderRadius:12,cursor:"pointer",color:C.green}}>
+                <span>💾</span><div style={{textAlign:"left"}}><div style={{fontWeight:700,fontSize:12}}>Exportieren</div><div style={{fontSize:10,color:C.muted}}>CSV speichern</div></div>
+              </button>
+            </div>}
+            {sortedMv.length===0
+              ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                <div style={{fontSize:52,marginBottom:14}}>📭</div>
+                <div style={{fontWeight:600,fontSize:15}}>Noch keine Buchungen</div>
+                <div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>
+              </div>
+              :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:10}}>
+                {sortedMv.map(e=><div key={e.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                    <div style={{fontSize:24,width:34,textAlign:"center"}}>{EMOJI[e.category]||"📝"}</div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13}}>{e.category}</div>
+                      <div style={{fontSize:11,color:C.muted,marginTop:2,maxWidth:isMobile?160:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note||e.date}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?C.green:C.red,whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
+                    <button onClick={()=>delEntry(e.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:14,padding:"2px 6px"}}>✕</button>
+                  </div>
+                </div>)}
+              </div>
+            }
+          </>}
+
+          {/* KATEGORIEN */}
+          {tab==="cats"&&(catSorted.length===0
+            ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:52,marginBottom:14}}>📊</div><div style={{fontWeight:600,fontSize:15}}>Noch keine Ausgaben</div></div>
+            :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+              {catSorted.map(([cat,amt])=><div key={cat} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                  <span style={{fontWeight:700,fontSize:13}}>{EMOJI[cat]||"📝"} {cat}</span>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontWeight:900,color:C.red,fontSize:14}}>€{fmtAmt(amt)}</div>
+                    <div style={{fontSize:10,color:C.muted}}>{((amt/exp)*100).toFixed(1)}%</div>
+                  </div>
+                </div>
+                <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${(amt/exp)*100}%`,background:"linear-gradient(90deg,#f87171,#fb9999)",borderRadius:3}}/>
+                </div>
+              </div>)}
+            </div>
+          )}
+
+          {/* ZIELE */}
+          {tab==="goals"&&<>
+            {isMobile&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+              <button onClick={openNew} style={{background:C.gold,border:"none",color:"#080e1a",fontSize:12,fontWeight:800,padding:"9px 16px",borderRadius:9,cursor:"pointer"}}>+ Neues Ziel</button>
+            </div>}
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
+              {goals.map(g=>{
+                const p=g.target>0?Math.min((g.saved/g.target)*100,100):0;
+                return <div key={g.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:18}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      <div style={{fontSize:30,lineHeight:1}}>{g.icon}</div>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:15}}>{g.name}</div>
+                        <div style={{fontSize:11,color:C.muted,marginTop:3}}>{g.saved>=g.target?"🎉 Ziel erreicht!":`Noch €${Math.max(0,g.target-g.saved).toLocaleString("de-DE")} bis zum Ziel`}</div>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>openEdit(g)} style={{background:C.border,border:"none",color:C.mutedLight,fontSize:12,padding:"6px 10px",borderRadius:8,cursor:"pointer"}}>✏️</button>
+                      <button onClick={()=>delGoal(g.id)} style={{background:C.border,border:"none",color:C.red,fontSize:12,padding:"6px 10px",borderRadius:8,cursor:"pointer"}}>✕</button>
+                    </div>
+                  </div>
+                  <div style={{height:8,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:8}}>
+                    <div style={{height:"100%",width:`${p}%`,background:g.color,borderRadius:4,boxShadow:`0 0 8px ${g.color}60`}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
+                    <span style={{fontSize:12,color:g.color,fontWeight:800}}>€{g.saved.toLocaleString("de-DE")} gespart</span>
+                    <span style={{fontSize:12,color:g.color,fontWeight:700}}>{p.toFixed(1)}%</span>
+                    <span style={{fontSize:12,color:C.muted}}>Ziel: €{g.target.toLocaleString("de-DE")}</span>
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Schnell einzahlen</div>
+                  <div style={{display:"flex",gap:8}}>
+                    {[50,100,200,500].map(a=><button key={a} onClick={()=>addSaved(g.id,a)} style={{flex:1,padding:"9px 0",background:C.bg,border:`1px solid ${g.color}55`,color:g.color,borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:700}}>+{a}</button>)}
+                  </div>
+                </div>;
+              })}
+            </div>
+          </>}
+        </div>
+      </div>
+    </div>
+
+    {/* FAB (mobile only) */}
+    {isMobile&&tab!=="goals"&&<button onClick={()=>setShowAdd(true)} style={{position:"fixed",bottom:26,right:24,width:60,height:60,borderRadius:"50%",background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",cursor:"pointer",fontSize:32,color:"#080e1a",fontWeight:900,boxShadow:`0 4px 28px ${C.gold}55`,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>}
+
+    {/* Desktop add button */}
+    {!isMobile&&tab!=="goals"&&<button onClick={()=>setShowAdd(true)} style={{position:"fixed",bottom:32,right:32,background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",cursor:"pointer",fontSize:14,color:"#080e1a",fontWeight:800,boxShadow:`0 4px 28px ${C.gold}55`,padding:"14px 24px",borderRadius:14,display:"flex",alignItems:"center",gap:8}}>
+      <span style={{fontSize:18}}>+</span> Buchung hinzufügen
+    </button>}
+
+    {/* CSV IMPORT MODAL */}
+    {showImport&&<Overlay title="📂 CSV importieren" onClose={()=>{setShowImport(false);resetImport();}}>
+      <div style={{display:"flex",gap:0,marginBottom:20,background:C.bg,borderRadius:10,padding:4}}>
+        {[["upload","1. Datei"],["map","2. Spalten"],["preview","3. Vorschau"]].map(([s,lbl])=>
+          <div key={s} style={{flex:1,textAlign:"center",padding:"7px 0",borderRadius:8,background:csvStep===s?C.card:"transparent",color:csvStep===s?C.gold:C.muted,fontSize:11,fontWeight:csvStep===s?700:400}}>{lbl}</div>
+        )}
+      </div>
+      {csvStep==="upload"&&<>
+        <div style={{background:"#0a1628",border:`1px solid ${C.gold}33`,borderRadius:12,padding:16,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:10}}>📱 So exportierst du bei Trade Republic:</div>
+          <div style={{fontSize:12,color:C.mutedLight,lineHeight:1.9}}>1. App öffnen → „Konto" tippen<br/>2. Oben rechts → „Kontoauszug"<br/>3. Zeitraum wählen → <strong style={{color:C.gold}}>„CSV exportieren"</strong></div>
+        </div>
+        <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}}/>
+        <button onClick={()=>fileRef.current&&fileRef.current.click()} style={{width:"100%",padding:16,background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:"#080e1a"}}>📁 CSV-Datei auswählen</button>
+        <div style={{textAlign:"center",marginTop:12,fontSize:11,color:C.muted}}>Funktioniert mit Trade Republic, ING, DKB, Sparkasse, N26</div>
+      </>}
+      {csvStep==="map"&&<>
+        <div style={{background:"#071a10",border:"1px solid #1a4020",borderRadius:10,padding:12,marginBottom:4,fontSize:12,color:"#86efac"}}>✅ <strong>{csvRaw.length} Transaktionen</strong> erkannt. Kategorien werden automatisch erkannt.</div>
+        {[["date","📅 Datum-Spalte"],["amount","💶 Betrags-Spalte"],["note","📝 Beschreibungs-Spalte (für auto. Kategorien)"]].map(([key,lbl])=>
+          <Field key={key} label={lbl}>
+            <select value={csvMap[key]} onChange={e=>setCsvMap(m=>({...m,[key]:e.target.value}))} style={IS}>
+              <option value="">-- nicht verwenden --</option>
+              {csvHeaders.map(h=><option key={h} value={h}>{h}{csvRaw[0]&&csvRaw[0][h]?` → z.B. "${csvRaw[0][h]}"`:""}</option>)}
+            </select>
+          </Field>
+        )}
+        <div style={{display:"flex",gap:10,marginTop:16}}>
+          <button onClick={resetImport} style={{flex:1,padding:13,background:C.border,border:"none",borderRadius:10,color:C.text,cursor:"pointer",fontWeight:600}}>← Zurück</button>
+          <button onClick={buildPreview} disabled={!csvMap.date||!csvMap.amount} style={{flex:2,padding:13,background:(!csvMap.date||!csvMap.amount)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:10,cursor:(!csvMap.date||!csvMap.amount)?"not-allowed":"pointer",fontWeight:800,color:(!csvMap.date||!csvMap.amount)?C.muted:"#080e1a"}}>Vorschau →</button>
+        </div>
+      </>}
+      {csvStep==="preview"&&<>
+        <div style={{fontSize:12,color:C.mutedLight,marginBottom:12}}>Vorschau – Kategorien automatisch erkannt:</div>
+        {csvPreview.map((e,i)=><div key={i} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <span style={{fontSize:20}}>{EMOJI[e.category]||"📝"}</span>
+            <div>
+              <div style={{fontSize:12,fontWeight:600,color:C.text}}>{e.category}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:1}}>{e.note||e.date}</div>
+            </div>
+          </div>
+          <span style={{fontWeight:800,fontSize:13,color:e.type==="income"?C.green:C.red}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
+        </div>)}
+        <div style={{background:"#0a1628",borderRadius:10,padding:12,marginBottom:14,fontSize:12,color:C.mutedLight}}>ℹ️ Unbekannte Händler → „Sonstiges". Du kannst danach manuell anpassen.</div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={()=>setCsvStep("map")} style={{flex:1,padding:13,background:C.border,border:"none",borderRadius:10,color:C.text,cursor:"pointer",fontWeight:600}}>← Zurück</button>
+          <button onClick={importAll} style={{flex:2,padding:13,background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:10,cursor:"pointer",fontWeight:800,color:"#080e1a"}}>✓ Alle {csvRaw.length} importieren</button>
+        </div>
+      </>}
+    </Overlay>}
+
+    {/* BUCHUNG HINZUFÜGEN */}
+    {showAdd&&<Overlay title="Buchung hinzufügen" onClose={()=>setShowAdd(false)}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        {["expense","income"].map(t=><button key={t} onClick={()=>setForm(f=>({...f,type:t,category:""}))} style={{padding:"12px 0",borderRadius:10,border:`2px solid ${form.type===t?(t==="expense"?C.red:C.green):C.border}`,background:form.type===t?(t==="expense"?"#200d0d":"#0d200d"):"transparent",color:form.type===t?(t==="expense"?C.red:C.green):C.muted,cursor:"pointer",fontWeight:700,fontSize:13}}>{t==="expense"?"📤 Ausgabe":"📥 Einnahme"}</button>)}
+      </div>
+      <Field label="Betrag (€)"><input type="number" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} style={IS}/></Field>
+      <Field label="Kategorie">
+        <select value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} style={{...IS,color:form.category?C.text:C.muted}}>
+          <option value="">-- Kategorie wählen --</option>
+          {(form.type==="income"?INCOME_CAT:EXPENSE_CAT).map(c=><option key={c} value={c}>{EMOJI[c]?`${EMOJI[c]} ${c}`:c}</option>)}
+        </select>
+      </Field>
+      <Field label="Notiz (optional)"><input type="text" placeholder="z.B. Rewe, Tankstelle…" value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} style={IS}/></Field>
+      <Field label="Datum"><input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={IS}/></Field>
+      <button onClick={addEntry} disabled={!form.amount||!form.category} style={{width:"100%",padding:15,marginTop:14,background:(!form.amount||!form.category)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!form.amount||!form.category)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!form.amount||!form.category)?C.muted:"#080e1a"}}>✓ Speichern</button>
+    </Overlay>}
+
+    {/* ZIEL MODAL */}
+    {showGoalDlg&&<Overlay title={editId?"Ziel bearbeiten":"Neues Sparziel"} onClose={()=>setShowGoalDlg(false)}>
+      <Field label="Icon"><div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:4}}>{GOAL_ICONS.map(ic=><button key={ic} onClick={()=>setGForm(f=>({...f,icon:ic}))} style={{fontSize:22,padding:"6px 8px",borderRadius:9,border:`2px solid ${gForm.icon===ic?C.gold:C.border}`,background:gForm.icon===ic?"#1a150a":C.bg,cursor:"pointer"}}>{ic}</button>)}</div></Field>
+      <Field label="Farbe"><div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>{GOAL_COLORS.map(col=><button key={col} onClick={()=>setGForm(f=>({...f,color:col}))} style={{width:30,height:30,borderRadius:"50%",background:col,border:`3px solid ${gForm.color===col?C.text:"transparent"}`,cursor:"pointer"}}/>)}</div></Field>
+      <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${gForm.color}55`,display:"flex",alignItems:"center",gap:10,marginTop:14}}>
+        <span style={{fontSize:24}}>{gForm.icon}</span>
+        <div><div style={{fontWeight:700,fontSize:13,color:gForm.color}}>{gForm.name||"Zielname…"}</div><div style={{fontSize:11,color:C.muted}}>Ziel: €{parseFloat(gForm.target||0).toLocaleString("de-DE")}</div></div>
+      </div>
+      <Field label="Name"><input type="text" placeholder="z.B. Urlaub, Auto…" value={gForm.name} onChange={e=>setGForm(f=>({...f,name:e.target.value}))} style={IS}/></Field>
+      <Field label="Zielbetrag (€)"><input type="number" inputMode="decimal" placeholder="z.B. 10000" value={gForm.target} onChange={e=>setGForm(f=>({...f,target:e.target.value}))} style={IS}/></Field>
+      <Field label="Bereits gespart (€)"><input type="number" inputMode="decimal" placeholder="0" value={gForm.saved} onChange={e=>setGForm(f=>({...f,saved:e.target.value}))} style={IS}/></Field>
+      <button onClick={saveGoal} disabled={!gForm.name||!gForm.target} style={{width:"100%",padding:15,marginTop:14,background:(!gForm.name||!gForm.target)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!gForm.name||!gForm.target)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!gForm.name||!gForm.target)?C.muted:"#080e1a"}}>{editId?"✓ Speichern":"✓ Erstellen"}</button>
+    </Overlay>}
+
+    {/* MOBILE DRAWER OVERLAY */}
+    {isMobile&&showDrawer&&<div onClick={()=>setShowDrawer(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:1050}}/>}
+
+    {/* MOBILE DRAWER */}
+    {isMobile&&<div style={{position:"fixed",top:0,left:0,height:"100%",width:280,background:"#0b1422",zIndex:1051,transform:showDrawer?"translateX(0)":"translateX(-100%)",transition:"transform 0.28s cubic-bezier(0.4,0,0.2,1)",borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",overflowY:"auto"}}>
+      <div style={{padding:"20px 18px 14px",background:C.card,borderBottom:`1px solid ${C.border}`,flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><div style={{fontSize:9,color:C.gold,letterSpacing:3,textTransform:"uppercase",marginBottom:2}}>Mein</div><div style={{fontSize:17,fontWeight:900}}>Haushaltsbuch</div></div>
+        <button onClick={()=>setShowDrawer(false)} style={{background:"none",border:"none",color:C.muted,fontSize:24,cursor:"pointer"}}>×</button>
+      </div>
+      <SidebarContent {...sidebarProps}/>
+    </div>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
