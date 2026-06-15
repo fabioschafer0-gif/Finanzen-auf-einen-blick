@@ -443,6 +443,26 @@ function App(){
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
 
+  // Gesamtportfolio-Chart: alle Positionen aufaddieren
+  const combinedChartData = (() => {
+    const all = depot
+      .map(e => ({prices: chartData[e.ticker], units: e.units}))
+      .filter(e => e.prices && e.prices.length > 1);
+    if (all.length === 0) return null;
+    const minLen = Math.min(...all.map(e => e.prices.length));
+    const combined = [];
+    for (let i = 0; i < minLen; i++) {
+      let total = 0; let valid = true;
+      for (const {prices, units} of all) {
+        if (prices[i] == null || isNaN(prices[i])) { valid = false; break; }
+        total += prices[i] * units;
+      }
+      combined.push(valid ? total : null);
+    }
+    const filtered = combined.filter(v => v != null);
+    return filtered.length > 1 ? combined : null;
+  })();
+
   if(loading)return<div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Lade Daten...</div>;
 
   const sidebarProps={tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,
@@ -711,6 +731,40 @@ function App(){
                 <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>Performance</div>
                 <div style={{fontSize:18,fontWeight:900,color:depotPnLPct>=0?C.green:C.red}}>{fmtPct(depotPnLPct)}</div>
               </div>
+            </div>}
+
+            {/* Gesamtportfolio-Chart */}
+            {combinedChartData&&depot.length>1&&<div style={{background:C.card,border:`1px solid ${C.blue}33`,borderRadius:16,padding:18,marginBottom:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <div style={{fontWeight:700,fontSize:14}}>📈 Gesamtportfolio – 3 Monate</div>
+                <div style={{fontSize:11,color:C.muted}}>Alle Positionen kombiniert</div>
+              </div>
+              <div style={{borderRadius:8,overflow:"hidden",marginBottom:12}}>
+                <MiniLineChart prices={combinedChartData} height={120}/>
+              </div>
+              {(()=>{
+                const valid = combinedChartData.filter(v=>v!=null);
+                const first = valid[0]||0;
+                const last  = valid[valid.length-1]||0;
+                const diff  = last-first;
+                const pct   = first>0?(diff/first)*100:0;
+                return <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+                  <div>
+                    <div style={{fontSize:9,color:C.muted,marginBottom:3}}>VOR 3 MONATEN</div>
+                    <div style={{fontSize:14,fontWeight:700,color:C.mutedLight}}>€{fmtShort(first)}</div>
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:13,fontWeight:800,color:diff>=0?C.green:C.red}}>
+                      {diff>=0?"+":""}€{fmtShort(Math.abs(diff))}
+                    </div>
+                    <div style={{fontSize:11,color:diff>=0?C.green:C.red,fontWeight:600}}>{fmtPct(pct)}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:9,color:C.muted,marginBottom:3}}>HEUTE (LIVE)</div>
+                    <div style={{fontSize:14,fontWeight:700,color:C.blue}}>€{fmtShort(last)}</div>
+                  </div>
+                </div>;
+              })()}
             </div>}
 
             {/* Aktionen */}
