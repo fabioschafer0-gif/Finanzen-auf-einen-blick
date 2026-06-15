@@ -1383,47 +1383,72 @@ function App(){
               ?<div style={{textAlign:"center",padding:"60px 20px",color:C.muted}}>
                 <div style={{fontSize:56,marginBottom:16}}>💳</div>
                 <div style={{fontWeight:700,fontSize:16,marginBottom:8,color:C.text}}>Noch keine Abos eingetragen</div>
-                <div style={{fontSize:13,marginBottom:24,lineHeight:1.8}}>Trage deine Abonnements einmalig ein – sie werden dann automatisch jeden Monat gebucht.</div>
+                <div style={{fontSize:13,marginBottom:6,lineHeight:1.8}}>Trage deine Abonnements einmalig ein – sie werden dann automatisch jeden Monat gebucht.</div>
                 <button onClick={openNewSub} style={{background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",color:"#080e1a",fontSize:14,padding:"13px 26px",borderRadius:11,cursor:"pointer",fontWeight:700}}>+ Erstes Abo hinzufügen</button>
               </div>
-              :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+              :<div>
                 {/* Wiederkehrende Einnahmen */}
-              {subs.some(s=>INCOME_CAT.includes(s.category))&&<>
-                <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:8,marginTop:4,textTransform:"uppercase",letterSpacing:1}}>💰 Wiederkehrende Einnahmen</div>
-                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:16}}>
-                  {subs.filter(s=>INCOME_CAT.includes(s.category)).map(s=>(
-                  <div key={s.id} style={{background:C.card,border:`1px solid ${s.active?C.border:C.border+"88"}`,borderRadius:14,padding:16,opacity:s.active?1:0.55}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <div style={{fontSize:28,lineHeight:1}}>{s.icon}</div>
-                        <div>
-                          <div style={{fontWeight:800,fontSize:14}}>{s.name}</div>
-                          <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.category} · am {s.day_of_month}. jeden Monat</div>
+                {subs.some(s=>INCOME_CAT.includes(s.category))&&<>
+                  <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>💰 Wiederkehrende Einnahmen</div>
+                  <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:16}}>
+                    {subs.filter(s=>INCOME_CAT.includes(s.category)).map(s=>(
+                      <div key={s.id} style={{background:C.card,border:`1px solid ${s.active?C.green+"55":C.border+"88"}`,borderRadius:14,padding:16,opacity:s.active?1:0.55}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10}}>
+                            <div style={{fontSize:28,lineHeight:1}}>{s.icon}</div>
+                            <div>
+                              <div style={{fontWeight:800,fontSize:14}}>{s.name}</div>
+                              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.category} · am {s.day_of_month}. jeden Monat</div>
+                            </div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>openEditSub(s)} style={{background:C.border,border:"none",color:C.mutedLight,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✏️</button>
+                            <button onClick={()=>delSub(s.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>
+                          </div>
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div style={{fontSize:20,fontWeight:900,color:C.green}}>+€{fmtAmt(s.amount)}</div>
+                          <button onClick={()=>toggleSub(s.id)} style={{background:s.active?"#071a10":"#1a0d0d",border:`1px solid ${s.active?"#1a4020":"#4a1a1a"}`,color:s.active?"#4ade80":"#f87171",fontSize:11,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
+                            {s.active?"● Aktiv":"○ Pausiert"}
+                          </button>
                         </div>
                       </div>
-                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                        <button onClick={()=>openEditSub(s)} style={{background:C.border,border:"none",color:C.mutedLight,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✏️</button>
-                        <button onClick={()=>delSub(s.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{fontSize:20,fontWeight:900,color:C.red}}>-€{fmtAmt(s.amount)}</div>
-                      <button onClick={()=>toggleSub(s.id)} style={{background:s.active?"#071a10":"#1a0d0d",border:`1px solid ${s.active?"#1a4020":"#4a1a1a"}`,color:s.active?"#4ade80":"#f87171",fontSize:11,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
-                        {s.active?"● Aktiv":"○ Pausiert"}
-                      </button>
-                    </div>
-                    <div style={{fontSize:10,color:C.muted,marginTop:8}}>
-                      {alreadyBookedThisMonth&&alreadyBookedThisMonth.has(`${s.name} (Abo)`)
-                        ?<span style={{color:"#4ade80"}}>✓ Diesen Monat gebucht</span>
-                        :<span>Noch nicht gebucht diesen Monat</span>}
-                    </div>
+                    ))}
                   </div>
-                ))}
+                </>}
+                {/* Abos (Ausgaben) */}
+                {subs.some(s=>!INCOME_CAT.includes(s.category))&&<>
+                  {subs.some(s=>INCOME_CAT.includes(s.category))&&<div style={{fontSize:11,fontWeight:700,color:C.red,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>📤 Abos (Ausgaben)</div>}
+                  <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+                    {subs.filter(s=>!INCOME_CAT.includes(s.category)).map(s=>(
+                      <div key={s.id} style={{background:C.card,border:`1px solid ${s.active?C.border:C.border+"88"}`,borderRadius:14,padding:16,opacity:s.active?1:0.55}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10}}>
+                            <div style={{fontSize:28,lineHeight:1}}>{s.icon}</div>
+                            <div>
+                              <div style={{fontWeight:800,fontSize:14}}>{s.name}</div>
+                              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.category} · am {s.day_of_month}. jeden Monat</div>
+                            </div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>openEditSub(s)} style={{background:C.border,border:"none",color:C.mutedLight,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✏️</button>
+                            <button onClick={()=>delSub(s.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>
+                          </div>
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div style={{fontSize:20,fontWeight:900,color:C.red}}>-€{fmtAmt(s.amount)}</div>
+                          <button onClick={()=>toggleSub(s.id)} style={{background:s.active?"#071a10":"#1a0d0d",border:`1px solid ${s.active?"#1a4020":"#4a1a1a"}`,color:s.active?"#4ade80":"#f87171",fontSize:11,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
+                            {s.active?"● Aktiv":"○ Pausiert"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>}
               </div>
             }
-          </>}
 
-          {/* ── ETF DEPOT ── */}
+                    {/* ── ETF DEPOT ── */}
           {tab==="depot"&&<>
             {/* Portfolio-Zusammenfassung */}
             {depot.length>0&&<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(4,1fr)",gap:10,marginBottom:18}}>
