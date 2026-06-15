@@ -444,6 +444,485 @@ function App(){
     if(bookedRef.current) return;
     bookedRef.current=true;
     const now=new Date();
+    const year=now.getFullYear();
+    const mon=String(now.getMonth()+1).padStart(2,"0");
+    const currentMonth=`${year}-${mon}`;
+    const today=now.getDate();
+
+    const activeSubs=loadedSubs.filter(s=>s.active&&s.day_of_month<=today);
+    if(activeSubs.length===0) return;
+
+    // Direkt DB abfragen was diesen Monat schon gebucht ist (zuverlaessigste Methode)
+    const {data:existing}=await sb.from('entries')
+      .select('note')
+      .eq('user_id',userId)
+      .gte('date',`${currentMonth}-01`)
+      .lte('date',`${currentMonth}-31`);
+
+    const alreadyBooked=new Set((existing||[]).map(e=>e.note));
+    const toBook=activeSubs.filter(s=>!alreadyBooked.has(`${s.name} (Abo)`));
+    if(toBook.length===0) return;
+
+    const newEntries=toBook.map(s=>{
+      const maxDay=new Date(year,now.getMonth()+1,0).getDate();
+      const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
+      return{id:uid(),user_id:userId,type:"expense",category:s.category,amount:s.amount,note:`${s.name} (Abo)`,date:d};
+    });
+
+    const{error}=await sb.from('entries').insert(newEntries);
+    if(!error){
+      setEntries(prev=>[...prev,...newEntries.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]);
+      const t=toBook.length;
+      setTimeout(()=>pop(`🔄 ${t} Abo${t>1?"s":""} für ${currentMonth} gebucht!`),600);
+    }
+  };
+
+  DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Haushaltsbuch</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#080e1a;font-family:system-ui,-apple-system,sans-serif;color:#e2e8f0;}
+  select option{background:#101828;color:#e2e8f0;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-track{background:#080e1a;}
+  ::-webkit-scrollbar-thumb{background:#1e2d45;border-radius:4px;}
+  input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin 1s linear infinite;display:inline-block;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const { createClient } = window.supabase;
+const sb = createClient('https://hqdqcufkqjialfxpfsgc.supabase.co','eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxZHFjdWZrcWppYWxmeHBmc2djIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1MTg3MzIsImV4cCI6MjA5NzA5NDczMn0.sLAO-Gi2J-xkLOgdKFIVXZMtIjFHX8fAZ_P0HU_9bvs');
+
+// ── TOKENS ──────────────────────────────────────────────────────
+const C = {
+  bg:"#080e1a", card:"#101828", cardAlt:"#0c1422", border:"#1e2d45",
+  gold:"#c9a227", goldLight:"#e8c04a", green:"#22c55e", red:"#f87171",
+  blue:"#3b82f6", blueDark:"#1e3a5f",
+  text:"#e2e8f0", muted:"#64748b", mutedLight:"#94a3b8",
+};
+const GOAL_COLORS=["#c9a227","#3b82f6","#8b5cf6","#22c55e","#f97316","#ec4899","#14b8a6","#ef4444"];
+const GOAL_ICONS=["🏠","🚗","🏖️","🛡️","📱","🎓","✈️","🌍","💒","🏋️","🐕","🎮","💍","🎸","📷"];
+const INCOME_CAT=["Gehalt","Nebeneinkommen","Freiberuflich","Bonus","Sonstiges"];
+const EXPENSE_CAT=["Miete / Wohnen","Lebensmittel","Transport","Versicherungen","Freizeit","Kleidung","Bildung","Gesundheit","Haushalt","Sonstiges"];
+const EMOJI={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
+
+const ETF_PRESETS=[
+  {name:"iShares MSCI World",        ticker:"EUNL.DE"},
+  {name:"iShares Core MSCI EM IMI",  ticker:"IS3N.DE"},
+  {name:"Vanguard FTSE All-World",   ticker:"VWRL.MI"},
+  {name:"iShares S&P 500",           ticker:"SXR8.DE"},
+  {name:"iShares DAX",               ticker:"EXS1.DE"},
+  {name:"Xtrackers MSCI World Swap", ticker:"DBXW.DE"},
+];
+
+const SUB_PRESETS=[
+  {name:"Netflix",       icon:"📺",amount:15.99,category:"Freizeit"},
+  {name:"Spotify",       icon:"🎵",amount:9.99, category:"Freizeit"},
+  {name:"Amazon Prime",  icon:"📦",amount:8.99, category:"Freizeit"},
+  {name:"Disney+",       icon:"🎬",amount:11.99,category:"Freizeit"},
+  {name:"Apple iCloud",  icon:"☁️",amount:0.99,category:"Sonstiges"},
+  {name:"YouTube Premium",icon:"▶️",amount:11.99,category:"Freizeit"},
+  {name:"DAZN",          icon:"⚽",amount:29.99,category:"Freizeit"},
+  {name:"Fitnessstudio", icon:"🏋️",amount:29.99,category:"Gesundheit"},
+  {name:"GEZ/ARD ZDF",   icon:"📡",amount:18.36,category:"Miete / Wohnen"},
+  {name:"Adobe CC",      icon:"🎨",amount:54.99,category:"Bildung"},
+];
+
+// ── HELPERS ──────────────────────────────────────────────────────
+const fmtAmt   = n=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtShort = n=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
+const fmtPct   = n=>(n>=0?"+":"")+n.toFixed(2)+"%";
+const fmtMonth = m=>new Date(m+"-01").toLocaleDateString("de-DE",{month:"long",year:"numeric"});
+const todayStr = ()=>new Date().toISOString().slice(0,10);
+const thisMonth= ()=>{const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;};
+const uid      = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+const fmtDate  = d=>{
+  if(!d)return"Kein Datum";
+  const dt=new Date(d+"T12:00:00");
+  const today=todayStr();
+  const yd=new Date();yd.setDate(yd.getDate()-1);
+  const yStr=yd.toISOString().slice(0,10);
+  if(d===today)return"Heute";
+  if(d===yStr)return"Gestern";
+  return dt.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+};
+
+// ── AUTO-KATEGORISIERUNG ─────────────────────────────────────────
+function autoCategory(note,type){
+  const n=(note||"").toLowerCase();
+  if(type==="income"){
+    if(/gehalt|lohn|salary|payroll/.test(n))       return "Gehalt";
+    if(/nebeneinkommen|freelance|honorar/.test(n)) return "Nebeneinkommen";
+    if(/bonus|prämie|gratifikation/.test(n))       return "Bonus";
+    return "Sonstiges";
+  }
+  if(/rewe|lidl|aldi|edeka|penny|netto|kaufland|dm-|rossmann|müller|bäcker|metzger|supermarkt|lebensmittel/.test(n)) return "Lebensmittel";
+  if(/miete|warmmiete|nebenkosten|hausgeld|strom|gas |wasser |gez|rundfunk/.test(n))                               return "Miete / Wohnen";
+  if(/tankstelle|aral|shell|bp |total |esso|jet |db |hvv|mvv|bvg|rnv|sbahn|ubahn|öpnv|parken|parkhaus/.test(n))   return "Transport";
+  if(/versicherung|allianz|huk|axa|generali|ergo|signal|debeka/.test(n))                                          return "Versicherungen";
+  if(/netflix|spotify|amazon prime|disney|apple|google play|youtube|kino|konzert|theater|steam|gaming/.test(n))   return "Freizeit";
+  if(/zalando|h&m|zara|c&a|primark|about you|kleidung|schuhe|mode/.test(n))                                      return "Kleidung";
+  if(/schule|uni |kurs|bildung|bücher|volkshochschule|weiterbildung|seminar/.test(n))                             return "Bildung";
+  if(/apotheke|arzt|krankenhaus|medikament|zahnarzt|physiotherapie|optiker/.test(n))                              return "Gesundheit";
+  if(/ikea|bauhaus|obi |hornbach|haushalt|möbel|media markt|saturn/.test(n))                                      return "Haushalt";
+  return "Sonstiges";
+}
+
+// ── CSV PARSE ────────────────────────────────────────────────────
+function parseCSV(text){
+  const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
+  const sep=lines[0].split(";").length>lines[0].split(",").length?";":",";
+  function splitLine(l){const res=[];let cur="",inQ=false;for(let ch of l){if(ch==='"'){inQ=!inQ;}else if(ch===sep&&!inQ){res.push(cur.trim());cur="";}else{cur+=ch;}}res.push(cur.trim());return res;}
+  const headers=splitLine(lines[0]).map(h=>h.replace(/"/g,"").trim());
+  const rows=lines.slice(1).map(l=>{const cells=splitLine(l);return headers.reduce((o,h,i)=>{o[h]=(cells[i]||"").replace(/"/g,"").trim();return o;},{});}).filter(r=>Object.values(r).some(v=>v));
+  return{headers,rows};
+}
+function parseAmount(s=""){
+  const c=s.replace(/[€$\s]/g,"");
+  if(c.includes(",")&&c.includes("."))return parseFloat(c.replace(/\./g,"").replace(",","."));
+  if(c.includes(","))return parseFloat(c.replace(",","."));
+  return parseFloat(c);
+}
+function parseDate(s=""){
+  const dm=s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if(dm)return`${dm[3]}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`;
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+  return todayStr();
+}
+function autoDetect(headers){
+  return{
+    date:  headers.find(h=>/datum|date|buchung|wert|time/i.test(h))||"",
+    amount:headers.find(h=>/betrag|amount|summe|kredit|soll|haben/i.test(h))||"",
+    note:  headers.find(h=>/beschreibung|verwendung|reference|typ|type|name|empf/i.test(h))||"",
+  };
+}
+
+// ── MINI LINE CHART (SVG) ────────────────────────────────────────
+function MiniLineChart({prices,height=70}){
+  if(!prices||prices.length<2)return<div style={{height,background:C.bg,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:11,color:C.muted}}>Lädt Chart…</span></div>;
+  const valid=prices.filter(p=>p!=null&&!isNaN(p));
+  if(valid.length<2)return<div style={{height,background:C.bg,borderRadius:8}}/>;
+  const W=300,H=height;
+  const min=Math.min(...valid)*0.998;
+  const max=Math.max(...valid)*1.002;
+  const range=max-min||1;
+  const pts=valid.map((p,i)=>[(i/(valid.length-1))*W, H-((p-min)/range)*(H-6)-3]);
+  const line=pts.map(([x,y])=>`${x},${y}`).join(" ");
+  const area=`${pts[0][0]},${H} ${line} ${pts[pts.length-1][0]},${H}`;
+  const isPos=valid[valid.length-1]>=valid[0];
+  const stroke=isPos?C.green:C.red;
+  const fill=isPos?"#22c55e18":"#f8717118";
+  return(
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height,display:"block"}} preserveAspectRatio="none">
+      <polygon points={area} fill={fill}/>
+      <polyline points={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+// ── STYLES ───────────────────────────────────────────────────────
+const IS={width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",WebkitAppearance:"none",boxSizing:"border-box"};
+const INIT_GOALS=[{id:"g1",name:"Immobilie Mannheim",icon:"🏠",color:"#c9a227",target:50000,saved:0}];
+
+// ── COMPONENTS ───────────────────────────────────────────────────
+function StatCard({label,amount,color,sign}){
+  return<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+    <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>{label}</div>
+    <div style={{fontSize:18,fontWeight:900,color}}>{sign}€{fmtShort(amount)}</div>
+  </div>;
+}
+
+function Overlay({title,children,onClose}){
+  return<div onClick={e=>{if(e.target===e.currentTarget)onClose();}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+    <div style={{background:C.card,width:"100%",maxWidth:520,borderRadius:20,padding:"24px 22px 36px",border:`1px solid ${C.border}`,maxHeight:"90vh",overflowY:"auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div style={{fontWeight:800,fontSize:17}}>{title}</div>
+        <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:28,cursor:"pointer",lineHeight:1}}>×</button>
+      </div>
+      {children}
+    </div>
+  </div>;
+}
+
+function Field({label,children}){
+  return<div style={{marginTop:14}}>
+    <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>{label}</div>
+    {children}
+  </div>;
+}
+
+// ── DATE GROUPED LIST ───────────────────────────────────────────────────
+function DateGroupedList({entries,onDelete,isMobile}){
+  const EMOJI_MAP={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
+  const fmt=(n)=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtS=(n)=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
+  const fmtD=d=>{
+    if(!d)return"Kein Datum";
+    const dt=new Date(d+"T12:00:00");
+    const today=new Date().toISOString().slice(0,10);
+    const yd=new Date();yd.setDate(yd.getDate()-1);
+    if(d===today)return"Heute";
+    if(d===yd.toISOString().slice(0,10))return"Gestern";
+    return dt.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"});
+  };
+  // Group by date
+  const grouped={};
+  entries.forEach(e=>{const d=e.date||"?";if(!grouped[d])grouped[d]=[];grouped[d].push(e);});
+  const groups=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+  return(
+    <div>
+      {groups.map(date=>{
+        const day=grouped[date];
+        const dInc=day.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+        const dExp=day.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+        const dNet=dInc-dExp;
+        return(
+          <div key={date} style={{marginBottom:24}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:"1px solid #1e2d45"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:3,height:18,background:"#c9a227",borderRadius:2,flexShrink:0}}/>
+                <span style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{fmtD(date)}</span>
+                <span style={{fontSize:10,color:"#64748b",background:"#1e2d45",padding:"2px 7px",borderRadius:6}}>{day.length}</span>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                {dInc>0&&<span style={{fontSize:11,fontWeight:700,color:"#22c55e"}}>+€{fmtS(dInc)}</span>}
+                {dExp>0&&<span style={{fontSize:11,fontWeight:700,color:"#f87171"}}>-€{fmtS(dExp)}</span>}
+                <span style={{fontSize:11,fontWeight:800,color:dNet>=0?"#22c55e":"#f87171"}}>{dNet>=0?"+":""}€{fmtS(Math.abs(dNet))}</span>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:8}}>
+              {day.map(e=>(
+                <div key={e.id} style={{background:"#101828",border:"1px solid #1e2d45",borderRadius:12,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <div style={{fontSize:22,width:32,textAlign:"center"}}>{EMOJI_MAP[e.category]||"📝"}</div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13,color:"#e2e8f0"}}>{e.category}</div>
+                      {e.note&&<div style={{fontSize:11,color:"#64748b",marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note}</div>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?"#22c55e":"#f87171",whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmt(e.amount)}</span>
+                    <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── SIDEBAR ──────────────────────────────────────────────────────
+function SidebarContent({tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,onNav,onImport,onExport}){
+  return<>
+    <div style={{paddingTop:8}}>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,padding:"8px 18px 6px"}}>Navigation</div>
+      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["subs","💳","Abos","Monatliche Kosten"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"],["depot","💹","ETF-Depot","Live-Kurse"]].map(([id,ico,lbl,sub])=>
+        <button key={id} onClick={()=>onNav(id)} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:tab===id?"#162030":"transparent",border:"none",borderLeft:tab===id?`3px solid ${C.gold}`:"3px solid transparent",color:tab===id?C.gold:C.text,cursor:"pointer",textAlign:"left"}}>
+          <span style={{fontSize:19,width:26,textAlign:"center"}}>{ico}</span>
+          <div><div style={{fontSize:13,fontWeight:tab===id?700:500}}>{lbl}</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>{sub}</div></div>
+        </button>
+      )}
+      <div style={{borderTop:`1px solid ${C.border}`,margin:"6px 0"}}/>
+      <button onClick={onImport} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:"transparent",border:"none",borderLeft:"3px solid transparent",color:C.text,cursor:"pointer",textAlign:"left"}}>
+        <span style={{fontSize:19,width:26,textAlign:"center"}}>📂</span>
+        <div><div style={{fontSize:13,fontWeight:500}}>CSV importieren</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>Kontoauszug einlesen</div></div>
+      </button>
+      <button onClick={onExport} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:"transparent",border:"none",borderLeft:"3px solid transparent",color:C.text,cursor:"pointer",textAlign:"left"}}>
+        <span style={{fontSize:19,width:26,textAlign:"center"}}>💾</span>
+        <div><div style={{fontSize:13,fontWeight:500}}>CSV exportieren</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>Alle Buchungen speichern</div></div>
+      </button>
+    </div>
+
+    <div style={{padding:"14px 18px",borderTop:`1px solid ${C.border}`,marginTop:8}}>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:10}}>{fmtMonth(month)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+        <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EINNAHMEN</div><div style={{fontSize:14,fontWeight:800,color:C.green}}>+€{fmtShort(inc)}</div></div>
+        <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>AUSGABEN</div><div style={{fontSize:14,fontWeight:800,color:C.red}}>-€{fmtShort(exp)}</div></div>
+      </div>
+      <div style={{background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+        <div style={{fontSize:9,color:C.muted,marginBottom:3}}>BILANZ</div>
+        <div style={{fontSize:16,fontWeight:900,color:bal>=0?C.green:C.red}}>{bal>=0?"+":"-"}€{fmtShort(Math.abs(bal))}</div>
+      </div>
+    </div>
+
+    {depotTotal>0&&<div style={{padding:"10px 18px",borderTop:`1px solid ${C.border}`}}>
+      <div style={{fontSize:9,color:C.blue,textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>💹 ETF-Depot</div>
+      <div style={{background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center",border:`1px solid ${C.blue}33`}}>
+        <div style={{fontSize:9,color:C.muted,marginBottom:3}}>DEPOTWERT</div>
+        <div style={{fontSize:16,fontWeight:900,color:C.blue}}>€{fmtShort(depotTotal)}</div>
+      </div>
+    </div>}
+
+    {goals.filter(g=>g.saved>=g.target).length>0&&
+      <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{fontSize:9,color:"#4ade80",textTransform:"uppercase",letterSpacing:1.5,marginBottom:10}}>🏆 Erreichte Ziele</div>
+        {goals.filter(g=>g.saved>=g.target).map(g=>
+          <div key={g.id} style={{background:"#071a10",border:"1px solid #1a4020",borderRadius:10,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{g.icon}</span>
+            <div><div style={{fontWeight:700,fontSize:13,color:"#4ade80"}}>{g.name}</div><div style={{fontSize:11,color:"#86efac",marginTop:2}}>Ziel erreicht! 🎉</div></div>
+          </div>
+        )}
+      </div>
+    }
+
+    {goals.filter(g=>g.saved<g.target).length>0&&
+      <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,marginBottom:12}}>Aktive Sparziele</div>
+        {goals.filter(g=>g.saved<g.target).map(g=>{
+          const p=g.target>0?Math.min((g.saved/g.target)*100,100):0;
+          return<div key={g.id} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+              <span style={{fontSize:12,color:C.text}}>{g.icon} {g.name}</span>
+              <span style={{fontSize:11,color:g.color,fontWeight:700}}>{p.toFixed(0)}%</span>
+            </div>
+            <div style={{height:5,background:C.border,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${p}%`,background:g.color,borderRadius:3}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+              <span style={{fontSize:10,color:g.color,fontWeight:600}}>€{fmtShort(g.saved)}</span>
+              <span style={{fontSize:10,color:C.muted}}>/ €{fmtShort(g.target)}</span>
+            </div>
+          </div>;
+        })}
+      </div>
+    }
+
+    <div style={{marginTop:"auto",padding:"14px 18px",borderTop:`1px solid ${C.border}`}}>
+      <div style={{fontSize:10,color:C.muted,textAlign:"center",lineHeight:1.6}}>
+        Dein Weg zur Immobilie 🏠<br/>
+        <span style={{color:C.gold,fontWeight:700}}>€{totalSaved.toLocaleString("de-DE")}</span>
+        <span style={{color:C.mutedLight}}> von €{totalTarget.toLocaleString("de-DE")}</span>
+      </div>
+    </div>
+  </>;
+}
+
+// ── MAIN APP ─────────────────────────────────────────────────────
+function App(){
+  const [entries,      setEntries]     = useState([]);
+  const [goals,        setGoals]       = useState(INIT_GOALS);
+  const [depot,        setDepot]       = useState([]);
+  const [month,        setMonth]       = useState(thisMonth());
+  const [tab,          setTab]         = useState("overview");
+  const [showAdd,      setShowAdd]     = useState(false);
+  const [showGoalDlg,  setShowGoalDlg] = useState(false);
+  const [editId,       setEditId]      = useState(null);
+  const [showDepotDlg, setShowDepotDlg]= useState(false);
+  const [editDepotId,  setEditDepotId] = useState(null);
+  const [loading,      setLoading]     = useState(true);
+  const [toast,        setToast]       = useState(null);
+  const [showDrawer,   setShowDrawer]  = useState(false);
+  const [showImport,   setShowImport]  = useState(false);
+  const [csvStep,      setCsvStep]     = useState("upload");
+  const [csvHeaders,   setCsvHeaders]  = useState([]);
+  const [csvRaw,       setCsvRaw]      = useState([]);
+  const [csvMap,       setCsvMap]      = useState({date:"",amount:"",note:""});
+  const [csvPreview,   setCsvPreview]  = useState([]);
+  const [windowWidth,  setWindowWidth] = useState(window.innerWidth);
+  const [priceData,    setPriceData]   = useState({});
+  const [chartData,    setChartData]   = useState({});
+  const [priceLoading, setPriceLoading]= useState({});
+  const [lastUpdated,  setLastUpdated] = useState(null);
+  const fileRef       = useRef(null);
+  const loadingRef    = useRef(false);   // Verhindert doppeltes Laden
+  const bookedRef     = useRef(false);   // Verhindert doppelte Abo-Buchung
+  const [form,  setForm]  = useState({type:"expense",category:"",amount:"",note:"",date:todayStr()});
+  const [gForm, setGForm] = useState({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});
+  const [dForm, setDForm] = useState({name:"",ticker:"",units:"",avgPrice:""});
+
+  const [subs,        setSubs]        = useState([]);
+  const [showSubDlg,  setShowSubDlg]  = useState(false);
+  const [editSubId,   setEditSubId]   = useState(null);
+  const [sForm,       setSForm]       = useState({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+
+  const isMobile = windowWidth < 768;
+
+  useEffect(()=>{
+    sb.auth.getSession().then(({data:{session}})=>{
+      const u=session?.user??null;
+      setUser(u);
+      if(u) loadFromCloud(u.id);
+      else { setLoading(false); }
+      setAuthLoading(false);
+    });
+    const {data:{subscription}} = sb.auth.onAuthStateChange((_ev,session)=>{
+      const u=session?.user??null;
+      setUser(u);
+      if(u) loadFromCloud(u.id);  // Guard in loadFromCloud verhindert doppeltes Laden
+      else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setSubs([]); loadingRef.current=false; bookedRef.current=false; setLoading(false); }
+    });
+    const p=new URLSearchParams(window.location.search);
+    if(p.get("add")==="1"){
+      const amount=(p.get("amount")||"").replace(",",".");
+      const type=p.get("type")||"expense";
+      const note=p.get("note")||"";
+      const cat=p.get("cat")||autoCategory(note,type);
+      setTimeout(()=>{
+        setForm({type,amount,note,category:cat,date:todayStr()});
+        setShowAdd(true);
+      },600);
+      window.history.replaceState({},"",window.location.pathname);
+    }
+    const onResize=()=>setWindowWidth(window.innerWidth);
+    window.addEventListener("resize",onResize);
+    return()=>{subscription.unsubscribe();window.removeEventListener("resize",onResize);};
+  },[]);
+
+  const loadFromCloud=async(userId)=>{
+    if(loadingRef.current) return;  // Schon am Laden
+    loadingRef.current=true;
+    setLoading(true);
+    try{
+      const [eR,gR,dR,sR]=await Promise.all([
+        sb.from('entries').select('*').eq('user_id',userId),
+        sb.from('goals').select('*').eq('user_id',userId),
+        sb.from('depot').select('*').eq('user_id',userId),
+        sb.from('subscriptions').select('*').eq('user_id',userId)
+      ]);
+      const loadedEntries=eR.data?eR.data.map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date})):[];
+      if(eR.data) setEntries(loadedEntries);
+      if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
+      else setGoals(INIT_GOALS);
+      if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
+      // Duplikate aus DB entfernen (by name, erste Instanz behalten)
+      const rawSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      const seenNames=new Set();
+      const loadedSubs=rawSubs.filter(s=>{
+        const k=s.name.toLowerCase();
+        if(seenNames.has(k)) return false;
+        seenNames.add(k); return true;
+      });
+      setSubs(loadedSubs);
+      await autoBookSubs(userId,loadedSubs,loadedEntries);
+    }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
+    setLoading(false);
+    loadingRef.current=false;
+  };
+
+  const autoBookSubs=async(userId,loadedSubs,loadedEntries)=>{
+    if(bookedRef.current) return;
+    bookedRef.current=true;
+    const now=new Date();
     // Lokale Zeitzone verwenden (nicht UTC) um Datumsvergleich korrekt zu machen
     const year=now.getFullYear();
     const mon=String(now.getMonth()+1).padStart(2,"0");
@@ -729,6 +1208,13 @@ function App(){
   const totalTarget = goals.reduce((s,g)=>s+g.target,0);
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
+
+  // Welche Abos sind diesen Monat schon in den Buchungen?
+  const alreadyBookedThisMonth=new Set(
+    entries
+      .filter(e=>e.date&&e.date.startsWith(thisMonth())&&(e.note||"").endsWith("(Abo)"))
+      .map(e=>e.note)
+  );
 
   // Gesamtportfolio-Chart: alle Positionen aufaddieren
   const combinedChartData = (() => {
@@ -1087,17 +1573,10 @@ function App(){
                         {s.active?"● Aktiv":"○ Pausiert"}
                       </button>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
-                      {s.last_processed
-                        ?<div style={{fontSize:10,color:C.muted}}>✓ Gebucht: {s.last_processed}</div>
-                        :<div style={{fontSize:10,color:C.muted}}>Noch nicht gebucht</div>}
-                      {s.last_processed&&<button onClick={()=>{
-                        setSubs(prev=>prev.map(x=>x.id===s.id?{...x,last_processed:""}:x));
-                        sb.from('subscriptions').update({last_processed:""}).eq('id',s.id);
-                        pop("🔄 Abo wird beim nächsten Laden neu gebucht");
-                      }} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,padding:"2px 8px",borderRadius:6,cursor:"pointer"}}>
-                        Zurücksetzen
-                      </button>}
+                    <div style={{fontSize:10,color:C.muted,marginTop:8}}>
+                      {alreadyBookedThisMonth&&alreadyBookedThisMonth.has(`${s.name} (Abo)`)
+                        ?<span style={{color:"#4ade80"}}>✓ Diesen Monat gebucht</span>
+                        :<span>Noch nicht gebucht diesen Monat</span>}
                     </div>
                   </div>
                 ))}
