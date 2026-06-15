@@ -361,7 +361,9 @@ function App(){
   const [chartData,    setChartData]   = useState({});
   const [priceLoading, setPriceLoading]= useState({});
   const [lastUpdated,  setLastUpdated] = useState(null);
-  const fileRef = useRef(null);
+  const fileRef       = useRef(null);
+  const loadingRef    = useRef(false);   // Verhindert doppeltes Laden
+  const bookedRef     = useRef(false);   // Verhindert doppelte Abo-Buchung
   const [form,  setForm]  = useState({type:"expense",category:"",amount:"",note:"",date:todayStr()});
   const [gForm, setGForm] = useState({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});
   const [dForm, setDForm] = useState({name:"",ticker:"",units:"",avgPrice:""});
@@ -387,8 +389,8 @@ function App(){
     const {data:{subscription}} = sb.auth.onAuthStateChange((_ev,session)=>{
       const u=session?.user??null;
       setUser(u);
-      if(u) loadFromCloud(u.id);
-      else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setLoading(false); }
+      if(u) loadFromCloud(u.id);  // Guard in loadFromCloud verhindert doppeltes Laden
+      else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setSubs([]); loadingRef.current=false; bookedRef.current=false; setLoading(false); }
     });
     const p=new URLSearchParams(window.location.search);
     if(p.get("add")==="1"){
@@ -408,6 +410,8 @@ function App(){
   },[]);
 
   const loadFromCloud=async(userId)=>{
+    if(loadingRef.current) return;  // Schon am Laden
+    loadingRef.current=true;
     setLoading(true);
     try{
       const [eR,gR,dR,sR]=await Promise.all([
@@ -424,16 +428,20 @@ function App(){
       const loadedSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
       setSubs(loadedSubs);
       await autoBookSubs(userId,loadedSubs,loadedEntries);
-    }catch(e){console.error("loadFromCloud:",e);}
+    }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
     setLoading(false);
+    loadingRef.current=false;
   };
 
   const autoBookSubs=async(userId,loadedSubs,loadedEntries)=>{
+    if(bookedRef.current) return;  // Schon ausgefuehrt diese Session
+    bookedRef.current=true;
     const now=new Date();
     const currentMonth=now.toISOString().slice(0,7);
     const today=now.getDate();
     const toBook=loadedSubs.filter(s=>s.active&&s.last_processed!==currentMonth&&s.day_of_month<=today);
-    if(toBook.length===0)return;
+    if(toBook.length===0) return;
+    // Pruefen ob bereits Abo-Eintraege fuer diesen Monat existieren (extra Sicherheit)
     const newEntries=toBook.map(s=>{
       const maxDay=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
       const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
@@ -444,7 +452,8 @@ function App(){
       await Promise.all(toBook.map(s=>sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',s.id)));
       setEntries(prev=>[...prev,...newEntries.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]);
       setSubs(prev=>prev.map(s=>toBook.find(t=>t.id===s.id)?{...s,last_processed:currentMonth}:s));
-      setTimeout(()=>{ const t=toBook.length; if(t>0) alert(`🔄 ${t} Abo${t>1?"s":""} automatisch für ${currentMonth} gebucht!`); },800);
+      const t=toBook.length;
+      setTimeout(()=>pop(`🔄 ${t} Abo${t>1?"s":""} automatisch für ${currentMonth} gebucht!`),600);
     }
   };
   const pop=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
@@ -812,19 +821,33 @@ function App(){
       {/* MAIN */}
       <div style={{flex:1,minWidth:0}}>
 
-        {/* Monat-Nav (nicht im Depot-Tab) */}
-        {tab!=="depot"&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:isMobile?"10px 16px":"12px 28px",background:C.cardAlt,borderBottom:`1px solid ${C.border}`}}>
-          <button onClick={()=>shiftMonth(-1)} style={{background:C.border,border:"none",color:C.text,padding:"8px 20px",borderRadius:9,cursor:"pointer",fontWeight:700}}>←</button>
-          <span style={{fontWeight:700,fontSize:15}}>{fmtMonth(month)}</span>
-          <button onClick={()=>shiftMonth(1)} style={{background:C.border,border:"none",color:C.text,padding:"8px 20px",borderRadius:9,cursor:"pointer",fontWeight:700}}>→</button>
-        </div>}
+        {/* Seiten-Header mit Titel + optionaler Monatsnavigation */}
+        {(()=>{
+          const TAB_META={
+            overview:{label:"Übersicht",icon:"📊",hasMonth:true},
+            list:    {label:"Buchungen",  icon:"📋",hasMonth:true},
+            cats:    {label:"Kategorien", icon:"📈",hasMonth:true},
+            goals:   {label:"Sparziele",  icon:"🎯",hasMonth:false},
+            subs:    {label:"Abos",       icon:"💳",hasMonth:false},
+            depot:   {label:"ETF-Depot",  icon:"💹",hasMonth:false},
+          };
+          const meta=TAB_META[tab]||TAB_META.overview;
+          return(
+            <div style={{background:C.cardAlt,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 16px":"12px 28px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:18}}>{meta.icon}</span>
+                <span style={{fontWeight:800,fontSize:16,color:C.text}}>{meta.label}</span>
+              </div>
+              {meta.hasMonth&&<div style={{display:"flex",alignItems:"center",gap:10}}>
+                <button onClick={()=>shiftMonth(-1)} style={{background:C.border,border:"none",color:C.text,width:34,height:34,borderRadius:9,cursor:"pointer",fontWeight:700,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>←</button>
+                <span style={{fontWeight:700,fontSize:14,color:C.mutedLight,minWidth:isMobile?110:160,textAlign:"center"}}>{fmtMonth(month)}</span>
+                <button onClick={()=>shiftMonth(1)} style={{background:C.border,border:"none",color:C.text,width:34,height:34,borderRadius:9,cursor:"pointer",fontWeight:700,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>→</button>
+              </div>}
+            </div>
+          );
+        })()}
 
-        {/* TABS */}
-        <div style={{display:"flex",background:C.card,borderBottom:`1px solid ${C.border}`,overflowX:"auto"}}>
-          {[["overview","📊","Übersicht"],["list","📋","Buchungen"],["cats","📈","Kategorien"],["goals","🎯","Ziele"],["subs","💳","Abos"],["depot","💹","Depot"]].map(([id,ico,lbl])=>
-            <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"13px 4px",background:"none",border:"none",borderBottom:tab===id?`2px solid ${id==="depot"?C.blue:C.gold}`:"2px solid transparent",color:tab===id?(id==="depot"?C.blue:C.gold):C.muted,fontWeight:tab===id?700:400,fontSize:isMobile?9:12,cursor:"pointer",whiteSpace:"nowrap"}}>{ico} {lbl}</button>
-          )}
-        </div>
+
 
         <div style={{padding:isMobile?14:28,paddingBottom:100}}>
 
@@ -874,6 +897,24 @@ function App(){
                 {bal>0?<>Diesen Monat hast du <strong style={{color:"#4ade80"}}>€{fmtAmt(bal)}</strong> übrig – verteile es auf deine Sparziele!</>:"Trage Einkommen und Ausgaben ein oder importiere per CSV."}
               </div>
             </div>
+
+            {/* Letzte Buchungen */}
+            {sortedMv.length>0&&<div style={{marginTop:isMobile?14:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.mutedLight,marginBottom:10,textTransform:"uppercase",letterSpacing:1}}>Letzte Buchungen</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {sortedMv.slice(0,5).map(e=><div key={e.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <span style={{fontSize:20}}>{EMOJI[e.category]||"📝"}</span>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13}}>{e.category}</div>
+                      <div style={{fontSize:10,color:C.muted}}>{e.note||e.date}</div>
+                    </div>
+                  </div>
+                  <span style={{fontWeight:800,fontSize:13,color:e.type==="income"?C.green:C.red}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
+                </div>)}
+                {sortedMv.length>5&&<div style={{textAlign:"center",fontSize:12,color:C.muted,padding:"4px 0"}}>+{sortedMv.length-5} weitere → Buchungen-Tab</div>}
+              </div>
+            </div>}
           </>}
 
           {/* ── BUCHUNGEN ── */}
