@@ -50,6 +50,19 @@ const ETF_PRESETS=[
   {name:"Xtrackers MSCI World Swap", ticker:"DBXW.DE"},
 ];
 
+const SUB_PRESETS=[
+  {name:"Netflix",       icon:"📺",amount:15.99,category:"Freizeit"},
+  {name:"Spotify",       icon:"🎵",amount:9.99, category:"Freizeit"},
+  {name:"Amazon Prime",  icon:"📦",amount:8.99, category:"Freizeit"},
+  {name:"Disney+",       icon:"🎬",amount:11.99,category:"Freizeit"},
+  {name:"Apple iCloud",  icon:"☁️",amount:0.99,category:"Sonstiges"},
+  {name:"YouTube Premium",icon:"▶️",amount:11.99,category:"Freizeit"},
+  {name:"DAZN",          icon:"⚽",amount:29.99,category:"Freizeit"},
+  {name:"Fitnessstudio", icon:"🏋️",amount:29.99,category:"Gesundheit"},
+  {name:"GEZ/ARD ZDF",   icon:"📡",amount:18.36,category:"Miete / Wohnen"},
+  {name:"Adobe CC",      icon:"🎨",amount:54.99,category:"Bildung"},
+];
+
 // ── HELPERS ──────────────────────────────────────────────────────
 const fmtAmt   = n=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtShort = n=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
@@ -178,7 +191,7 @@ function SidebarContent({tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depo
   return<>
     <div style={{paddingTop:8}}>
       <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,padding:"8px 18px 6px"}}>Navigation</div>
-      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"],["depot","💹","ETF-Depot","Live-Kurse"]].map(([id,ico,lbl,sub])=>
+      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"],["subs","💳","Abos","Monatliche Kosten"],["depot","💹","ETF-Depot","Live-Kurse"]].map(([id,ico,lbl,sub])=>
         <button key={id} onClick={()=>onNav(id)} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:tab===id?"#162030":"transparent",border:"none",borderLeft:tab===id?`3px solid ${C.gold}`:"3px solid transparent",color:tab===id?C.gold:C.text,cursor:"pointer",textAlign:"left"}}>
           <span style={{fontSize:19,width:26,textAlign:"center"}}>{ico}</span>
           <div><div style={{fontSize:13,fontWeight:tab===id?700:500}}>{lbl}</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>{sub}</div></div>
@@ -290,6 +303,10 @@ function App(){
   const [gForm, setGForm] = useState({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});
   const [dForm, setDForm] = useState({name:"",ticker:"",units:"",avgPrice:""});
 
+  const [subs,        setSubs]        = useState([]);
+  const [showSubDlg,  setShowSubDlg]  = useState(false);
+  const [editSubId,   setEditSubId]   = useState(null);
+  const [sForm,       setSForm]       = useState({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -330,17 +347,42 @@ function App(){
   const loadFromCloud=async(userId)=>{
     setLoading(true);
     try{
-      const [eR,gR,dR]=await Promise.all([
+      const [eR,gR,dR,sR]=await Promise.all([
         sb.from('entries').select('*').eq('user_id',userId),
         sb.from('goals').select('*').eq('user_id',userId),
-        sb.from('depot').select('*').eq('user_id',userId)
+        sb.from('depot').select('*').eq('user_id',userId),
+        sb.from('subscriptions').select('*').eq('user_id',userId)
       ]);
-      if(eR.data) setEntries(eR.data.map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date})));
+      const loadedEntries=eR.data?eR.data.map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date})):[];
+      if(eR.data) setEntries(loadedEntries);
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
       else setGoals(INIT_GOALS);
       if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
+      const loadedSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      setSubs(loadedSubs);
+      await autoBookSubs(userId,loadedSubs,loadedEntries);
     }catch(e){console.error("loadFromCloud:",e);}
     setLoading(false);
+  };
+
+  const autoBookSubs=async(userId,loadedSubs,loadedEntries)=>{
+    const now=new Date();
+    const currentMonth=now.toISOString().slice(0,7);
+    const today=now.getDate();
+    const toBook=loadedSubs.filter(s=>s.active&&s.last_processed!==currentMonth&&s.day_of_month<=today);
+    if(toBook.length===0)return;
+    const newEntries=toBook.map(s=>{
+      const maxDay=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+      const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
+      return{id:uid(),user_id:userId,type:"expense",category:s.category,amount:s.amount,note:`${s.name} (Abo)`,date:d};
+    });
+    const {error}=await sb.from('entries').insert(newEntries);
+    if(!error){
+      await Promise.all(toBook.map(s=>sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',s.id)));
+      setEntries(prev=>[...prev,...newEntries.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]);
+      setSubs(prev=>prev.map(s=>toBook.find(t=>t.id===s.id)?{...s,last_processed:currentMonth}:s));
+      setTimeout(()=>{ const t=toBook.length; if(t>0) alert(`🔄 ${t} Abo${t>1?"s":""} automatisch für ${currentMonth} gebucht!`); },800);
+    }
   };
   const pop=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
 
@@ -398,6 +440,40 @@ function App(){
     setEntries(prev=>prev.filter(e=>e.id!==id));
     pop("🗑️ Gelöscht");
     sb.from('entries').delete().eq('id',id);
+  };
+
+  // ── ABOS
+  const openNewSub=()=>{setEditSubId(null);setSForm({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});setShowSubDlg(true);};
+  const openEditSub=s=>{setEditSubId(s.id);setSForm({name:s.name,icon:s.icon,amount:String(s.amount),category:s.category,day_of_month:String(s.day_of_month),active:s.active});setShowSubDlg(true);};
+  const saveSub=()=>{
+    if(!user){setShowLoginModal(true);return;}
+    if(!sForm.name||!sForm.amount)return;
+    const entry={name:sForm.name,icon:sForm.icon,amount:parseFloat(String(sForm.amount).replace(",",".")),category:sForm.category,day_of_month:Math.max(1,Math.min(31,parseInt(sForm.day_of_month)||1)),active:sForm.active};
+    if(editSubId){
+      const upd={...entry,id:editSubId};
+      setSubs(prev=>prev.map(s=>s.id===editSubId?upd:s));
+      sb.from('subscriptions').upsert({id:upd.id,user_id:user.id,...entry}).then(({error})=>{if(error)pop("❌ "+error.message);});
+      pop("✅ Abo aktualisiert");
+    } else {
+      const ns={id:"sub"+uid(),...entry,last_processed:""};
+      setSubs(prev=>[...prev,ns]);
+      sb.from('subscriptions').insert({id:ns.id,user_id:user.id,...entry,last_processed:""}).then(({error})=>{if(error){setSubs(prev=>prev.filter(s=>s.id!==ns.id));pop("❌ "+error.message);}});
+      pop("🔄 Abo hinzugefügt!");
+    }
+    setShowSubDlg(false);
+  };
+  const delSub=id=>{
+    setSubs(prev=>prev.filter(s=>s.id!==id));
+    sb.from('subscriptions').delete().eq('id',id);
+    pop("🗑️ Abo gelöscht");
+  };
+  const toggleSub=id=>{
+    setSubs(prev=>prev.map(s=>{
+      if(s.id!==id)return s;
+      const na=!s.active;
+      sb.from('subscriptions').update({active:na}).eq('id',id);
+      return{...s,active:na};
+    }));
   };
 
   // ── ZIELE ────────────────────────────────────────────────────
@@ -682,7 +758,7 @@ function App(){
 
         {/* TABS */}
         <div style={{display:"flex",background:C.card,borderBottom:`1px solid ${C.border}`,overflowX:"auto"}}>
-          {[["overview","📊","Übersicht"],["list","📋","Buchungen"],["cats","📈","Kategorien"],["goals","🎯","Ziele"],["depot","💹","Depot"]].map(([id,ico,lbl])=>
+          {[["overview","📊","Übersicht"],["list","📋","Buchungen"],["cats","📈","Kategorien"],["goals","🎯","Ziele"],["subs","💳","Abos"],["depot","💹","Depot"]].map(([id,ico,lbl])=>
             <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"13px 4px",background:"none",border:"none",borderBottom:tab===id?`2px solid ${id==="depot"?C.blue:C.gold}`:"2px solid transparent",color:tab===id?(id==="depot"?C.blue:C.gold):C.muted,fontWeight:tab===id?700:400,fontSize:isMobile?9:12,cursor:"pointer",whiteSpace:"nowrap"}}>{ico} {lbl}</button>
           )}
         </div>
@@ -852,6 +928,69 @@ function App(){
                 </div>;
               })}
             </div>
+          </>}
+
+          {/* ── ABOS ── */}
+          {tab==="subs"&&<>
+            {/* Summary */}
+            {(()=>{
+              const activeSubs=subs.filter(s=>s.active);
+              const monthlyTotal=activeSubs.reduce((t,s)=>t+s.amount,0);
+              const yearlyTotal=monthlyTotal*12;
+              return subs.length>0&&<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(3,1fr)",gap:10,marginBottom:18}}>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 10px",textAlign:"center",gridColumn:isMobile?"1/-1":"auto"}}>
+                  <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>Monatliche Kosten</div>
+                  <div style={{fontSize:isMobile?22:24,fontWeight:900,color:C.red}}>€{fmtAmt(monthlyTotal)}</div>
+                </div>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>Jährlich</div>
+                  <div style={{fontSize:18,fontWeight:900,color:C.mutedLight}}>€{fmtShort(yearlyTotal)}</div>
+                </div>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>Aktive Abos</div>
+                  <div style={{fontSize:18,fontWeight:900,color:C.text}}>{activeSubs.length}</div>
+                </div>
+              </div>;
+            })()}
+            {/* Actions */}
+            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
+              <button onClick={openNewSub} style={{background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",color:"#080e1a",fontSize:13,padding:"9px 18px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Abo hinzufügen</button>
+            </div>
+            {/* List */}
+            {subs.length===0
+              ?<div style={{textAlign:"center",padding:"60px 20px",color:C.muted}}>
+                <div style={{fontSize:56,marginBottom:16}}>💳</div>
+                <div style={{fontWeight:700,fontSize:16,marginBottom:8,color:C.text}}>Noch keine Abos eingetragen</div>
+                <div style={{fontSize:13,marginBottom:24,lineHeight:1.8}}>Trage deine Abonnements einmalig ein – sie werden dann automatisch jeden Monat gebucht.</div>
+                <button onClick={openNewSub} style={{background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",color:"#080e1a",fontSize:14,padding:"13px 26px",borderRadius:11,cursor:"pointer",fontWeight:700}}>+ Erstes Abo hinzufügen</button>
+              </div>
+              :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
+                {[...subs].sort((a,b)=>b.amount-a.amount).map(s=>(
+                  <div key={s.id} style={{background:C.card,border:`1px solid ${s.active?C.border:C.border+"88"}`,borderRadius:14,padding:16,opacity:s.active?1:0.55}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{fontSize:28,lineHeight:1}}>{s.icon}</div>
+                        <div>
+                          <div style={{fontWeight:800,fontSize:14}}>{s.name}</div>
+                          <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.category} · am {s.day_of_month}. jeden Monat</div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <button onClick={()=>openEditSub(s)} style={{background:C.border,border:"none",color:C.mutedLight,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✏️</button>
+                        <button onClick={()=>delSub(s.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"4px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{fontSize:20,fontWeight:900,color:C.red}}>-€{fmtAmt(s.amount)}</div>
+                      <button onClick={()=>toggleSub(s.id)} style={{background:s.active?"#071a10":"#1a0d0d",border:`1px solid ${s.active?"#1a4020":"#4a1a1a"}`,color:s.active?"#4ade80":"#f87171",fontSize:11,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
+                        {s.active?"● Aktiv":"○ Pausiert"}
+                      </button>
+                    </div>
+                    {s.last_processed&&<div style={{fontSize:10,color:C.muted,marginTop:8}}>✓ Zuletzt gebucht: {s.last_processed}</div>}
+                  </div>
+                ))}
+              </div>
+            }
           </>}
 
           {/* ── ETF DEPOT ── */}
@@ -1112,6 +1251,56 @@ function App(){
       </Field>
       <button onClick={saveDepotEntry} disabled={!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice} style={{width:"100%",padding:15,marginTop:14,background:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.muted:"#fff"}}>
         {editDepotId?"✓ Speichern":"✓ Hinzufügen & Kurs laden"}
+      </button>
+    </Overlay>}
+
+    {/* ABO MODAL */}
+    {showSubDlg&&<Overlay title={editSubId?"Abo bearbeiten":"Neues Abo"} onClose={()=>setShowSubDlg(false)}>
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8}}>Schnellauswahl</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {SUB_PRESETS.map(p=><button key={p.name} onClick={()=>setSForm(f=>({...f,name:p.name,icon:p.icon,amount:String(p.amount),category:p.category}))} style={{padding:"5px 10px",background:sForm.name===p.name?`${C.gold}22`:C.bg,border:`1px solid ${sForm.name===p.name?C.gold:C.border}`,borderRadius:8,color:sForm.name===p.name?C.gold:C.mutedLight,fontSize:11,cursor:"pointer"}}>
+            {p.icon} {p.name}
+          </button>)}
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"60px 1fr",gap:10,marginTop:14}}>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Icon</div>
+          <input type="text" value={sForm.icon} onChange={e=>setSForm(f=>({...f,icon:e.target.value}))} style={{...{width:"100%",padding:"13px 8px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:22,outline:"none",textAlign:"center",boxSizing:"border-box"}}} maxLength={2}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Name</div>
+          <input type="text" placeholder="z.B. Netflix" value={sForm.name} onChange={e=>setSForm(f=>({...f,name:e.target.value}))} style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Betrag (€)</div>
+          <input type="number" inputMode="decimal" placeholder="9.99" value={sForm.amount} onChange={e=>setSForm(f=>({...f,amount:e.target.value}))} style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Tag im Monat</div>
+          <input type="number" min="1" max="31" placeholder="1" value={sForm.day_of_month} onChange={e=>setSForm(f=>({...f,day_of_month:e.target.value}))} style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+      <div style={{marginTop:14}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Kategorie</div>
+        <select value={sForm.category} onChange={e=>setSForm(f=>({...f,category:e.target.value}))} style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",WebkitAppearance:"none",boxSizing:"border-box"}}>
+          {EXPENSE_CAT.map(cat=><option key={cat} value={cat}>{EMOJI[cat]?`${EMOJI[cat]} ${cat}`:cat}</option>)}
+        </select>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginTop:16,padding:"12px 14px",background:C.bg,borderRadius:10}}>
+        <span style={{fontSize:13,color:C.text,flex:1}}>Abo aktiv</span>
+        <button onClick={()=>setSForm(f=>({...f,active:!f.active}))} style={{background:sForm.active?"#071a10":"#1a0d0d",border:`1px solid ${sForm.active?"#1a4020":"#4a1a1a"}`,color:sForm.active?"#4ade80":"#f87171",fontSize:12,padding:"6px 16px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
+          {sForm.active?"● Aktiv":"○ Pausiert"}
+        </button>
+      </div>
+      {sForm.name&&sForm.amount&&<div style={{marginTop:12,background:"#090f1e",border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",fontSize:12,color:C.mutedLight}}>
+        {sForm.icon} <strong style={{color:C.text}}>{sForm.name}</strong> wird am <strong style={{color:C.gold}}>{sForm.day_of_month||1}. jeden Monat</strong> automatisch als Ausgabe (€{sForm.amount}) gebucht.
+      </div>}
+      <button onClick={saveSub} disabled={!sForm.name||!sForm.amount} style={{width:"100%",padding:15,marginTop:14,background:(!sForm.name||!sForm.amount)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!sForm.name||!sForm.amount)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!sForm.name||!sForm.amount)?C.muted:"#080e1a"}}>
+        {editSubId?"✓ Speichern":"✓ Abo einrichten"}
       </button>
     </Overlay>}
 
