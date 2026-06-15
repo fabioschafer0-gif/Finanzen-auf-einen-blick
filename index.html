@@ -249,6 +249,60 @@ function DateGroupedList({entries,onDelete,isMobile}){
   );
 }
 
+// ── MONATSVERGLEICH-CHART ─────────────────────────────────────
+function MonthCompareChart({entries}){
+  const months=[];
+  for(let i=5;i>=0;i--){
+    const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);
+    const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const label=d.toLocaleDateString("de-DE",{month:"short",year:"2-digit"});
+    const mv=entries.filter(e=>e.date?.startsWith(m));
+    const inc=mv.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+    const exp=mv.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+    months.push({m,label,inc,exp});
+  }
+  const maxVal=Math.max(...months.flatMap(m=>[m.inc,m.exp]),1);
+  const W=520,H=130,bw=26,gap=8,gw=bw*2+gap,groupGap=16,totalW=months.length*(gw+groupGap);
+  const scl=v=>(v/maxVal)*H;
+  const fmt=n=>n>=1000?`${(n/1000).toFixed(1)}k`:`${Math.round(n)}`;
+  return(
+    <div style={{overflowX:"auto"}}>
+      <svg viewBox={`-10 0 ${totalW+20} ${H+52}`} style={{width:"100%",minWidth:320,display:"block"}}>
+        {/* Rasterlinien */}
+        {[0.25,0.5,0.75,1].map(f=><line key={f} x1={-10} y1={H-scl(maxVal*f)} x2={totalW+10} y2={H-scl(maxVal*f)} stroke="#1e2d45" strokeWidth="1"/>)}
+        {months.map((m,i)=>{
+          const x=i*(gw+groupGap);
+          const ih=scl(m.inc),eh=scl(m.exp);
+          const isLast=i===months.length-1;
+          return(
+            <g key={m.m}>
+              {/* Highlight aktueller Monat */}
+              {isLast&&<rect x={x-4} y={0} width={gw+8} height={H} fill="#ffffff08" rx={4}/>}
+              {/* Einnahmen (grün) */}
+              {m.inc>0&&<>
+                <rect x={x} y={H-ih} width={bw} height={ih} fill="#22c55e" rx={3} opacity={isLast?1:0.7}/>
+                {ih>18&&<text x={x+bw/2} y={H-ih+13} textAnchor="middle" fontSize="9" fill="#fff" fontWeight="600">{fmt(m.inc)}</text>}
+              </>}
+              {/* Ausgaben (rot) */}
+              {m.exp>0&&<>
+                <rect x={x+bw+gap} y={H-eh} width={bw} height={eh} fill="#f87171" rx={3} opacity={isLast?1:0.7}/>
+                {eh>18&&<text x={x+bw+gap+bw/2} y={H-eh+13} textAnchor="middle" fontSize="9" fill="#fff" fontWeight="600">{fmt(m.exp)}</text>}
+              </>}
+              {/* Monatsname */}
+              <text x={x+bw+gap/2} y={H+16} textAnchor="middle" fontSize="10" fill={isLast?"#c9a227":"#64748b"} fontWeight={isLast?"700":"400"}>{m.label}</text>
+            </g>
+          );
+        })}
+        {/* Legende */}
+        <g transform={`translate(0,${H+30})`}>
+          <rect x={0} y={0} width={10} height={10} fill="#22c55e" rx={2}/><text x={14} y={9} fontSize="10" fill="#64748b">Einnahmen</text>
+          <rect x={80} y={0} width={10} height={10} fill="#f87171" rx={2}/><text x={94} y={9} fontSize="10" fill="#64748b">Ausgaben</text>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 // ── SIDEBAR ──────────────────────────────────────────────────────
 function SidebarContent({tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,onNav,onImport,onExport}){
   return<>
@@ -369,6 +423,11 @@ function App(){
   const [dForm, setDForm] = useState({name:"",ticker:"",units:"",avgPrice:""});
 
   const [subs,        setSubs]        = useState([]);
+  const [search,      setSearch]      = useState("");
+  const [budgets,     setBudgets]     = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_budgets")||"{}");}catch{return {};}});
+  const [showBudgetDlg,setShowBudgetDlg]=useState(false);
+  const [budgetCat,   setBudgetCat]   = useState("");
+  const [budgetVal,   setBudgetVal]   = useState("");
   const [showSubDlg,  setShowSubDlg]  = useState(false);
   const [editSubId,   setEditSubId]   = useState(null);
   const [sForm,       setSForm]       = useState({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});
@@ -584,6 +643,14 @@ function App(){
     sb.from('subscriptions').delete().eq('id',id);
     pop("🗑️ Abo gelöscht");
   };
+  const saveBudgetFn=(cat,val)=>{
+    const nb={...budgets,[cat]:parseFloat(val)||0};
+    setBudgets(nb);
+    localStorage.setItem("hb_budgets",JSON.stringify(nb));
+    setShowBudgetDlg(false);
+    pop("✅ Budget gesetzt");
+  };
+
   const toggleSub=id=>{
     setSubs(prev=>prev.map(s=>{
       if(s.id!==id)return s;
@@ -732,6 +799,21 @@ function App(){
   const totalTarget = goals.reduce((s,g)=>s+g.target,0);
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
+
+  // Durchschnittliche Sparquote letzter 3 Monate
+  const avgSavings=(()=>{
+    const now=new Date();
+    const deltas=[];
+    for(let i=1;i<=3;i++){
+      const d=new Date(now);d.setMonth(d.getMonth()-i);
+      const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      const mv=entries.filter(e=>e.date?.startsWith(m));
+      const inc=mv.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+      const exp=mv.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+      if(inc>0||exp>0) deltas.push(inc-exp);
+    }
+    return deltas.length>0?deltas.reduce((a,b)=>a+b,0)/deltas.length:0;
+  })();
 
   // Welche Abos sind diesen Monat schon in den Buchungen?
   const alreadyBookedThisMonth=new Set(
@@ -938,6 +1020,12 @@ function App(){
               </div>
             </div>}
 
+            {/* Monatsvergleich */}
+            {entries.length>0&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:isMobile?14:20,marginBottom:isMobile?14:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.mutedLight,marginBottom:12}}>📊 6-Monats-Überblick</div>
+              <MonthCompareChart entries={entries}/>
+            </div>}
+
             <div style={{background:"#071a10",border:"1px solid #1a4020",borderRadius:14,padding:isMobile?14:20}}>
               <div style={{fontSize:12,fontWeight:700,color:"#4ade80",marginBottom:8}}>💡 Tipp</div>
               <div style={{fontSize:13,color:"#86efac",lineHeight:1.75}}>
@@ -974,31 +1062,57 @@ function App(){
                 <span>💾</span><div style={{textAlign:"left"}}><div style={{fontWeight:700,fontSize:12}}>Exportieren</div><div style={{fontSize:10,color:C.muted}}>CSV speichern</div></div>
               </button>
             </div>}
-            {sortedMv.length===0
-              ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-                <div style={{fontSize:52,marginBottom:14}}>📭</div>
-                <div style={{fontWeight:600,fontSize:15}}>Noch keine Buchungen</div>
-                <div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>
-              </div>
-              :<DateGroupedList entries={sortedMv} onDelete={delEntry} isMobile={isMobile}/>}
+            {/* Suche */}
+            <div style={{position:"relative",marginBottom:14}}>
+              <input
+                type="text" placeholder="🔍 Buchungen durchsuchen…"
+                value={search} onChange={e=>setSearch(e.target.value)}
+                style={{width:"100%",padding:"11px 14px 11px 14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:14,outline:"none",boxSizing:"border-box"}}
+              />
+              {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16}}>×</button>}
+            </div>
+            {(()=>{
+              const filtered=search?sortedMv.filter(e=>
+                (e.note||"").toLowerCase().includes(search.toLowerCase())||
+                (e.category||"").toLowerCase().includes(search.toLowerCase())
+              ):sortedMv;
+              return filtered.length===0
+                ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                  <div style={{fontSize:52,marginBottom:14}}>{search?"🔍":"📭"}</div>
+                  <div style={{fontWeight:600,fontSize:15}}>{search?"Keine Treffer für „"+search+"“":"Noch keine Buchungen"}</div>
+                  {!search&&<div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>}
+                </div>
+                :<DateGroupedList entries={filtered} onDelete={delEntry} isMobile={isMobile}/>;
+            })()}
           </>}
 
           {/* ── KATEGORIEN ── */}
           {tab==="cats"&&(catSorted.length===0
             ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:52,marginBottom:14}}>📊</div><div style={{fontWeight:600,fontSize:15}}>Noch keine Ausgaben</div></div>
             :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
-              {catSorted.map(([cat,amt])=><div key={cat} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-                  <span style={{fontWeight:700,fontSize:13}}>{EMOJI[cat]||"📝"} {cat}</span>
-                  <div style={{textAlign:"right"}}>
-                    <div style={{fontWeight:900,color:C.red,fontSize:14}}>€{fmtAmt(amt)}</div>
-                    <div style={{fontSize:10,color:C.muted}}>{((amt/exp)*100).toFixed(1)}%</div>
+              {catSorted.map(([cat,amt])=>{
+                const budget=budgets[cat]||0;
+                const budgetPct=budget>0?(amt/budget)*100:0;
+                const barColor=budget>0?(budgetPct>=100?"#f87171":budgetPct>=75?"#f59e0b":"#22c55e"):"#f87171";
+                const barWidth=budget>0?Math.min(budgetPct,100):(amt/exp)*100;
+                return<div key={cat} style={{background:C.card,border:`1px solid ${budget>0&&budgetPct>=100?"#f87171":C.border}`,borderRadius:12,padding:"14px 16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,alignItems:"flex-start"}}>
+                    <span style={{fontWeight:700,fontSize:13}}>{EMOJI[cat]||"📝"} {cat}</span>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:900,color:C.red,fontSize:14}}>€{fmtAmt(amt)}</div>
+                      {budget>0
+                        ?<div style={{fontSize:10,color:barColor,fontWeight:700}}>{budgetPct.toFixed(0)}% von €{fmtShort(budget)}</div>
+                        :<div style={{fontSize:10,color:C.muted}}>{((amt/exp)*100).toFixed(1)}% der Ausgaben</div>}
+                    </div>
                   </div>
-                </div>
-                <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${(amt/exp)*100}%`,background:"linear-gradient(90deg,#f87171,#fb9999)",borderRadius:3}}/>
-                </div>
-              </div>)}
+                  <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden",marginBottom:8}}>
+                    <div style={{height:"100%",width:`${barWidth}%`,background:barColor,borderRadius:3}}/>
+                  </div>
+                  <button onClick={()=>{setBudgetCat(cat);setBudgetVal(budget?String(budget):"");setShowBudgetDlg(true);}} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,padding:"3px 10px",borderRadius:6,cursor:"pointer"}}>
+                    {budget>0?"✏️ Budget ändern":"+ Budget setzen"}
+                  </button>
+                </div>;
+              })}
             </div>
           )}
 
@@ -1033,6 +1147,22 @@ function App(){
                     <span style={{fontSize:12,color:C.muted}}>Ziel: €{g.target.toLocaleString("de-DE")}</span>
                   </div>
                   <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Schnell einzahlen</div>
+                  {/* Finanzprognose */}
+                  {avgSavings>0&&g.saved<g.target&&(()=>{
+                    const remaining=g.target-g.saved;
+                    const months=Math.ceil(remaining/avgSavings);
+                    const date=new Date();date.setMonth(date.getMonth()+months);
+                    const dateStr=date.toLocaleDateString("de-DE",{month:"long",year:"numeric"});
+                    return<div style={{background:"#090f1e",border:`1px solid ${g.color}33`,borderRadius:10,padding:"10px 14px",marginBottom:14}}>
+                      <div style={{fontSize:11,color:g.color,fontWeight:700,marginBottom:3}}>🔮 Prognose</div>
+                      <div style={{fontSize:12,color:C.mutedLight,lineHeight:1.6}}>
+                        Bei Ø <strong style={{color:C.text}}>€{fmtShort(avgSavings)}/Monat</strong> erreichst du dieses Ziel in ca. <strong style={{color:g.color}}>{months} Monat{months!==1?"en":""}</strong> ({dateStr}).
+                      </div>
+                    </div>;
+                  })()}
+                  {avgSavings<=0&&g.saved<g.target&&<div style={{background:"#1a0808",border:"1px solid #4a1a1a",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#fca5a5"}}>
+                    ⚠️ Kein Sparfortschritt in den letzten 3 Monaten erkennbar.
+                  </div>}
                   <div style={{display:"flex",gap:8}}>
                     {[50,100,200,500].map(a=><button key={a} onClick={()=>addSaved(g.id,a)} style={{flex:1,padding:"9px 0",background:C.bg,border:`1px solid ${g.color}55`,color:g.color,borderRadius:9,cursor:"pointer",fontSize:13,fontWeight:700}}>+{a}</button>)}
                   </div>
@@ -1385,6 +1515,24 @@ function App(){
       <button onClick={saveDepotEntry} disabled={!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice} style={{width:"100%",padding:15,marginTop:14,background:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.muted:"#fff"}}>
         {editDepotId?"✓ Speichern":"✓ Hinzufügen & Kurs laden"}
       </button>
+    </Overlay>}
+
+    {/* BUDGET MODAL */}
+    {showBudgetDlg&&<Overlay title={`Budget für ${budgetCat}`} onClose={()=>setShowBudgetDlg(false)}>
+      <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.7}}>
+        Setze ein monatliches Budget für <strong style={{color:C.text}}>{EMOJI[budgetCat]||""} {budgetCat}</strong>.<br/>
+        Die App zeigt dir grün/gelb/rot wie nah du am Limit bist.
+      </div>
+      <div style={{marginTop:4}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Monatliches Budget (€)</div>
+        <input type="number" inputMode="decimal" placeholder="z.B. 300" value={budgetVal}
+          onChange={e=>setBudgetVal(e.target.value)}
+          style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+      </div>
+      <div style={{display:"flex",gap:10,marginTop:14}}>
+        {budgets[budgetCat]&&<button onClick={()=>{const nb={...budgets};delete nb[budgetCat];setBudgets(nb);localStorage.setItem("hb_budgets",JSON.stringify(nb));setShowBudgetDlg(false);pop("🗑️ Budget entfernt");}} style={{flex:1,padding:14,background:C.border,border:"none",borderRadius:12,color:C.muted,cursor:"pointer",fontWeight:600}}>Entfernen</button>}
+        <button onClick={()=>saveBudgetFn(budgetCat,budgetVal)} disabled={!budgetVal} style={{flex:2,padding:14,background:!budgetVal?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:!budgetVal?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:!budgetVal?C.muted:"#080e1a"}}>✓ Speichern</button>
+      </div>
     </Overlay>}
 
     {/* ABO MODAL */}
