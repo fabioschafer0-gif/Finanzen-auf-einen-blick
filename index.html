@@ -254,7 +254,7 @@ function SidebarContent({tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depo
   return<>
     <div style={{paddingTop:8}}>
       <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.5,padding:"8px 18px 6px"}}>Navigation</div>
-      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"],["subs","💳","Abos","Monatliche Kosten"],["depot","💹","ETF-Depot","Live-Kurse"]].map(([id,ico,lbl,sub])=>
+      {[["overview","📊","Übersicht","Einnahmen & Ausgaben"],["list","📋","Buchungen","Alle Einträge"],["subs","💳","Abos","Monatliche Kosten"],["cats","📈","Kategorien","Ausgaben aufgeteilt"],["goals","🎯","Sparziele","Meine Ziele"],["depot","💹","ETF-Depot","Live-Kurse"]].map(([id,ico,lbl,sub])=>
         <button key={id} onClick={()=>onNav(id)} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"11px 18px",background:tab===id?"#162030":"transparent",border:"none",borderLeft:tab===id?`3px solid ${C.gold}`:"3px solid transparent",color:tab===id?C.gold:C.text,cursor:"pointer",textAlign:"left"}}>
           <span style={{fontSize:19,width:26,textAlign:"center"}}>{ico}</span>
           <div><div style={{fontSize:13,fontWeight:tab===id?700:500}}>{lbl}</div><div style={{fontSize:10,color:C.muted,marginTop:1}}>{sub}</div></div>
@@ -439,17 +439,10 @@ function App(){
     const now=new Date();
     const currentMonth=now.toISOString().slice(0,7);
     const today=now.getDate();
-    // Bereits gebuchte Abo-Namen diesen Monat (Sicherheitsnetz)
-    const alreadyBooked=new Set(
-      loadedEntries
-        .filter(e=>e.date&&e.date.startsWith(currentMonth))
-        .map(e=>e.note)
-    );
     const toBook=loadedSubs.filter(s=>
       s.active&&
       s.day_of_month<=today&&
-      s.last_processed!==currentMonth&&
-      !alreadyBooked.has(`${s.name} (Abo)`)  // Kein Doppeleintrag
+      s.last_processed!==currentMonth
     );
     if(toBook.length===0) return;
     // Pruefen ob bereits Abo-Eintraege fuer diesen Monat existieren (extra Sicherheit)
@@ -520,6 +513,17 @@ function App(){
       .then(({error})=>{if(error){setEntries(prev=>prev.filter(x=>x.id!==e.id));pop("❌ Speichern fehlgeschlagen: "+error.message);}});
   };
   const delEntry=id=>{
+    // Wenn Abo-Eintrag geloescht wird, last_processed auf diesen Monat setzen
+    const entry=entries.find(e=>e.id===id);
+    if(entry&&entry.note&&entry.note.includes("(Abo)")){
+      const subName=entry.note.replace(" (Abo)","");
+      const matchingSub=subs.find(s=>s.name===subName);
+      if(matchingSub){
+        const currentMonth=new Date().toISOString().slice(0,7);
+        setSubs(prev=>prev.map(s=>s.id===matchingSub.id?{...s,last_processed:currentMonth}:s));
+        sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',matchingSub.id);
+      }
+    }
     setEntries(prev=>prev.filter(e=>e.id!==id));
     pop("🗑️ Gelöscht");
     sb.from('entries').delete().eq('id',id);
@@ -837,9 +841,9 @@ function App(){
           const TAB_META={
             overview:{label:"Übersicht",icon:"📊",hasMonth:true},
             list:    {label:"Buchungen",  icon:"📋",hasMonth:true},
+            subs:    {label:"Abos",       icon:"💳",hasMonth:false},
             cats:    {label:"Kategorien", icon:"📈",hasMonth:true},
             goals:   {label:"Sparziele",  icon:"🎯",hasMonth:false},
-            subs:    {label:"Abos",       icon:"💳",hasMonth:false},
             depot:   {label:"ETF-Depot",  icon:"💹",hasMonth:false},
           };
           const meta=TAB_META[tab]||TAB_META.overview;
