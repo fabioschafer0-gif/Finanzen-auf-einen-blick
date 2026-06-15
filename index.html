@@ -627,10 +627,15 @@ function App(){
     });
     setShowAdd(false);
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
-    // 2. Supabase awaited - sichtbarer Fehler bei Problemen
-    const{error}=await sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date});
+    // 2. Supabase awaited mit Verifikation
+    const{data:saved,error}=await sb.from('entries')
+      .insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
+      .select();
     if(error){
-      pop("❌ Supabase: "+error.message);
+      pop("❌ DB-Fehler: "+error.message);
+    } else if(!saved||saved.length===0){
+      // Insert lief durch aber kein Datensatz zurueck -> RLS blockiert SELECT
+      pop("⚠️ Gespeichert aber nicht lesbar – bitte SQL in Supabase ausführen");
     } else {
       pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
     }
