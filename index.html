@@ -491,28 +491,35 @@ function App(){
 
       const loadedEntries=(eR.data||[]).map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date}));
 
-      // Blacklist: absichtlich gelöschte IDs nicht re-uploaden
+      // Blacklist laden (absichtlich gelöschte IDs)
       let deletedIds=new Set();
       try{deletedIds=new Set(JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]"));}catch{}
-      // Supabase-IDs sammeln
-      const sbIds=new Set(loadedEntries.map(e=>e.id));
+
+      // Supabase-Einträge die eigentlich gelöscht sein sollten -> Retry
+      const stillInSb=loadedEntries.filter(e=>deletedIds.has(e.id));
+      if(stillInSb.length>0){
+        await Promise.all(stillInSb.map(e=>sb.from('entries').delete().eq('id',e.id)));
+      }
+
+      // Gefilterte Supabase-Daten (ohne Blacklist-Einträge)
+      const filteredSb=loadedEntries.filter(e=>!deletedIds.has(e.id));
+      const sbIds=new Set(filteredSb.map(e=>e.id));
+
       // localStorage Backup holen
       let localEntries=[];
       try{localEntries=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");}catch{}
-      // Lokale Einträge die NICHT in Supabase und NICHT gelöscht sind
+
+      // Lokale Einträge die NICHT in Supabase und NICHT gelöscht sind -> re-uploaden
       const missingInSb=localEntries.filter(e=>
-        !sbIds.has(e.id) &&
-        !deletedIds.has(e.id) &&
-        !e.id.startsWith("abo-")
+        !sbIds.has(e.id)&&!deletedIds.has(e.id)&&!e.id.startsWith("abo-")
       );
       if(missingInSb.length>0){
-        pop(`⬆️ ${missingInSb.length} fehlende Buchungen werden synchronisiert…`);
         const{error:syncErr}=await sb.from('entries')
           .insert(missingInSb.map(e=>({...e,user_id:userId})));
         if(syncErr) console.warn("Sync-Fehler:",syncErr.message);
-        else pop("✅ Buchungen synchronisiert!");
       }
-      const allEntries=[...loadedEntries,...missingInSb];
+
+      const allEntries=[...filteredSb,...missingInSb];
       setEntries(allEntries);
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(allEntries));}catch{}
 
