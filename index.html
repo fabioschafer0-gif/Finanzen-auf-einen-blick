@@ -282,6 +282,7 @@ function App(){
 
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
   const isMobile = windowWidth < 768;
 
@@ -373,6 +374,7 @@ function App(){
 
   // ── BUCHUNGEN ────────────────────────────────────────────────
   const addEntry=()=>{
+    if(!user){setShowLoginModal(true);return;}
     if(!form.amount||!form.category)return;
     const e={...form,id:uid(),amount:parseFloat(form.amount)};
     setEntries(prev=>[...prev,e]);
@@ -391,6 +393,7 @@ function App(){
   const openNew=()=>{setEditId(null);setGForm({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});setShowGoalDlg(true);};
   const openEdit=g=>{setEditId(g.id);setGForm({name:g.name,icon:g.icon,color:g.color,target:String(g.target),saved:String(g.saved)});setShowGoalDlg(true);};
   const saveGoal=()=>{
+    if(!user){setShowLoginModal(true);return;}
     if(!gForm.name||!gForm.target)return;
     if(editId){
       const upd={id:editId,...gForm,target:parseFloat(gForm.target),saved:gForm.saved!==""?parseFloat(gForm.saved):goals.find(g=>g.id===editId)?.saved||0};
@@ -425,6 +428,7 @@ function App(){
   const openNewDepot=()=>{setEditDepotId(null);setDForm({name:"",ticker:"",units:"",avgPrice:""});setShowDepotDlg(true);};
   const openEditDepot=etf=>{setEditDepotId(etf.id);setDForm({name:etf.name,ticker:etf.ticker,units:String(etf.units),avgPrice:String(etf.avgPrice)});setShowDepotDlg(true);};
   const saveDepotEntry=()=>{
+    if(!user){setShowLoginModal(true);return;}
     if(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)return;
     const entry={name:dForm.name,ticker:dForm.ticker.toUpperCase().trim(),units:parseFloat(dForm.units),avgPrice:parseFloat(String(dForm.avgPrice).replace(",","."))};
     if(editDepotId){
@@ -477,6 +481,7 @@ function App(){
       const type=amt>=0?"income":"expense";
       return{id:uid(),date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
     }).filter(Boolean);
+    if(!user){setShowLoginModal(true);return;}
     setEntries(prev=>[...prev,...newE]);
     if(newE.length>0&&user){
       sb.from('entries').insert(newE.map(e=>({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})));
@@ -544,23 +549,6 @@ function App(){
 
   if(authLoading)return<div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Verbinde...</div>;
 
-  if(!user)return(
-    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{textAlign:"center",maxWidth:380}}>
-        <div style={{fontSize:64,marginBottom:20}}>📒</div>
-        <div style={{fontSize:28,fontWeight:900,color:C.text,marginBottom:8,letterSpacing:-0.5}}>Haushaltsbuch</div>
-        <div style={{fontSize:14,color:C.muted,marginBottom:10}}>Deine Finanzen auf einen Blick</div>
-        <div style={{fontSize:12,color:C.muted,marginBottom:36,lineHeight:1.7}}>Melde dich an um deine Daten sicher in der Cloud zu speichern – auf allen Geräten verfügbar.</div>
-        <button onClick={()=>sb.auth.signInWithOAuth({provider:'github',options:{redirectTo:'https://finanzen-auf-einen-blick.vercel.app'}})}
-          style={{background:"#24292e",color:"#fff",border:"none",padding:"15px 32px",borderRadius:12,fontSize:15,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",gap:12,margin:"0 auto",boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-          Mit GitHub anmelden
-        </button>
-        <div style={{fontSize:11,color:C.muted,marginTop:20}}>Kostenlos · Keine Kreditkarte · Deine Daten gehören dir</div>
-      </div>
-    </div>
-  );
-
   if(loading)return<div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Lade Daten...</div>;
 
   const sidebarProps={tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,
@@ -578,6 +566,7 @@ function App(){
     <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,padding:isMobile?"16px 16px 14px":"18px 28px 16px"}}>
       <div style={{maxWidth:isMobile?480:1200,margin:"0 auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center"}}>
             {isMobile&&<button onClick={()=>setShowDrawer(true)} style={{background:"transparent",border:`1px solid ${C.border}`,width:40,height:40,borderRadius:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,padding:0,marginRight:12}}>
               <span style={{display:"block",width:16,height:2,background:C.gold,borderRadius:1}}/>
@@ -589,10 +578,26 @@ function App(){
               <div style={{fontSize:isMobile?19:24,fontWeight:900,letterSpacing:-0.5}}>Haushaltsbuch</div>
             </div>
           </div>
+          </div>
+          {isMobile&&<div>
+            {user
+              ?<button onClick={()=>sb.auth.signOut()} style={{width:36,height:36,borderRadius:"50%",background:C.gold,border:"none",fontSize:14,fontWeight:900,color:"#080e1a",cursor:"pointer"}}>{(user.email||user.user_metadata?.user_name||"U")[0].toUpperCase()}</button>
+              :<button onClick={()=>setShowLoginModal(true)} style={{background:C.gold,border:"none",color:"#080e1a",fontSize:12,padding:"8px 14px",borderRadius:9,cursor:"pointer",fontWeight:800}}>Anmelden</button>
+            }
+          </div>}
           {!isMobile&&<div style={{display:"flex",gap:10}}>
             <button onClick={openImport} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.mutedLight,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>📂 Importieren</button>
             <button onClick={exportCSV}  style={{background:"transparent",border:`1px solid ${C.green}55`,color:C.green,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>💾 Exportieren</button>
-            <button onClick={()=>sb.auth.signOut()} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>Abmelden</button>
+            {user
+              ?<div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:"6px 12px"}}>
+                  <div style={{width:26,height:26,borderRadius:"50%",background:C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,color:"#080e1a"}}>{(user.email||user.user_metadata?.user_name||"U")[0].toUpperCase()}</div>
+                  <span style={{fontSize:12,color:C.mutedLight,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.user_metadata?.user_name||user.email}</span>
+                </div>
+                <button onClick={()=>sb.auth.signOut()} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",borderRadius:9,cursor:"pointer",fontWeight:500}}>Abmelden</button>
+              </div>
+              :<button onClick={()=>setShowLoginModal(true)} style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 18px",borderRadius:9,cursor:"pointer",fontWeight:800}}>👤 Anmelden</button>
+            }
             <button onClick={openNew}    style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Neues Ziel</button>
           </div>}
         </div>
@@ -1069,6 +1074,22 @@ function App(){
       <button onClick={saveDepotEntry} disabled={!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice} style={{width:"100%",padding:15,marginTop:14,background:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.muted:"#fff"}}>
         {editDepotId?"✓ Speichern":"✓ Hinzufügen & Kurs laden"}
       </button>
+    </Overlay>}
+
+    {/* LOGIN MODAL */}
+    {showLoginModal&&<Overlay title="Anmelden um fortzufahren" onClose={()=>setShowLoginModal(false)}>
+      <div style={{textAlign:"center",padding:"10px 0 20px"}}>
+        <div style={{fontSize:44,marginBottom:12}}>🔒</div>
+        <div style={{fontSize:14,color:C.muted,marginBottom:28,lineHeight:1.7}}>
+          Melde dich an um Buchungen zu speichern und deine Daten auf allen Geräten zu nutzen.
+        </div>
+        <button onClick={()=>{setShowLoginModal(false);sb.auth.signInWithOAuth({provider:'github',options:{redirectTo:'https://finanzen-auf-einen-blick.vercel.app'}});}}
+          style={{width:"100%",background:"#24292e",color:"#fff",border:"none",padding:"14px 24px",borderRadius:12,fontSize:15,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:12,boxShadow:"0 4px 16px rgba(0,0,0,0.4)"}}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          Mit GitHub anmelden
+        </button>
+        <div style={{fontSize:11,color:C.muted,marginTop:16}}>Kostenlos · Daten werden sicher gespeichert</div>
+      </div>
     </Overlay>}
 
     {/* Mobile Drawer Overlay */}
