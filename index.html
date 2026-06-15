@@ -428,6 +428,7 @@ function App(){
   const [realBalance, setRealBalance]  = useState(()=>{try{return localStorage.getItem("hb_real_bal")||"";}catch{return "";}});
   const [baseBalance, setBaseBalance]  = useState(()=>{try{return localStorage.getItem("hb_base_bal")||"";}catch{return "";}});
   const [kontoDate,   setKontoDate]    = useState(()=>{try{return localStorage.getItem("hb_konto_date")||"";}catch{return "";}});
+  const [kontoRefDate,setKontoRefDate]= useState(()=>{try{return localStorage.getItem("hb_konto_ref_date")||"";}catch{return "";}});
   const [budgets,     setBudgets]     = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_budgets")||"{}");}catch{return {};}});
   const [showBudgetDlg,setShowBudgetDlg]=useState(false);
   const [budgetCat,   setBudgetCat]   = useState("");
@@ -473,7 +474,7 @@ function App(){
   },[]);
 
   const loadFromCloud=async(userId)=>{
-    if(loadingRef.current) return;  // Schon am Laden
+    if(loadingRef.current) return;
     loadingRef.current=true;
     setLoading(true);
     try{
@@ -483,8 +484,32 @@ function App(){
         sb.from('depot').select('*').eq('user_id',userId),
         sb.from('subscriptions').select('*').eq('user_id',userId)
       ]);
-      const loadedEntries=eR.data?eR.data.map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date})):[];
-      if(eR.data) setEntries(loadedEntries);
+
+      // Explizite Fehlerprüfung
+      if(eR.error) throw new Error("Buchungen: "+eR.error.message);
+      if(gR.error) throw new Error("Ziele: "+gR.error.message);
+
+      const loadedEntries=(eR.data||[]).map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date}));
+
+      if(loadedEntries.length>0){
+        setEntries(loadedEntries);
+        // localStorage Backup aktualisieren
+        try{localStorage.setItem("hb_entries_bak",JSON.stringify(loadedEntries));}catch{}
+      } else {
+        // Supabase leer - localStorage Backup laden?
+        try{
+          const bak=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");
+          if(bak.length>0){
+            setEntries(bak);
+            pop("⚠️ Buchungen aus Backup geladen – Sync läuft…");
+            // Re-Sync: Backup zu Supabase hochladen
+            sb.from('entries').insert(bak.map(e=>({...e,user_id:userId}))).then(({error})=>{
+              if(!error) pop("✅ Buchungen erfolgreich synchronisiert!");
+            });
+          }
+        }catch{}
+      }
+
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
       else setGoals(INIT_GOALS);
       if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
@@ -595,7 +620,18 @@ function App(){
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
     pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
     sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
-      .then(({error})=>{if(error){setEntries(prev=>prev.filter(x=>x.id!==e.id));pop("❌ Speichern fehlgeschlagen: "+error.message);}});
+      .then(({error})=>{
+        if(error){
+          setEntries(prev=>prev.filter(x=>x.id!==e.id));
+          pop("❌ Speichern fehlgeschlagen: "+error.message);
+        } else {
+          // Backup aktualisieren
+          setEntries(prev=>{
+            try{localStorage.setItem("hb_entries_bak",JSON.stringify(prev));}catch{}
+            return prev;
+          });
+        }
+      });
   };
   const delEntry=id=>{
     // Wenn Abo-Eintrag geloescht wird, last_processed auf diesen Monat setzen
@@ -610,7 +646,11 @@ function App(){
         sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',matchingSub.id);
       }
     }
-    setEntries(prev=>prev.filter(e=>e.id!==id));
+    setEntries(prev=>{
+      const next=prev.filter(e=>e.id!==id);
+      try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
+      return next;
+    });
     pop("🗑️ Gelöscht");
     sb.from('entries').delete().eq('id',id);
   };
@@ -804,10 +844,13 @@ function App(){
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
 
-  // Kontostand-Berechnung
+  // Kontostand-Berechnung (nur Eintraege ab Referenzdatum)
   const baseBalNum = parseFloat(baseBalance)||0;
-  const allInc = entries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-  const allExp = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+  const kontoEntries = kontoRefDate
+    ? entries.filter(e=>e.date&&e.date>=kontoRefDate)
+    : entries;
+  const allInc = kontoEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+  const allExp = kontoEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
   const calcBalance = baseBalNum + allInc - allExp;
   const realBalNum = parseFloat(realBalance)||null;
   const balDiff = realBalNum!==null ? realBalNum - calcBalance : null;
@@ -1575,10 +1618,10 @@ function App(){
     {/* KONTOSTAND MODAL */}
     {showKontoModal&&<Overlay title="💳 Kontostand-Abgleich" onClose={()=>setShowKontoModal(false)}>
       <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.7}}>
-        Gib dein <strong style={{color:C.text}}>Startguthaben</strong> ein (was hattest du als du anfingst zu tracken?) und deinen <strong style={{color:C.text}}>echten aktuellen Kontostand</strong> aus deiner Banking-App.
+        Gib deinen <strong style={{color:C.text}}>aktuellen Kontostand</strong> aus deiner Banking-App ein. Ab heute zählt die App alle neuen Buchungen dazu und vergleicht automatisch.
       </div>
       <div style={{marginTop:4}}>
-        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Startguthaben (€) <span style={{color:C.muted,fontSize:9,textTransform:"none"}}>(einmalig setzen)</span></div>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Aktueller Kontostand (€) <span style={{color:C.muted,fontSize:9,textTransform:"none"}}>(aus deiner Banking-App heute)</span></div>
         <input type="number" inputMode="decimal" placeholder="z.B. 2500.00" value={baseBalance}
           onChange={e=>setBaseBalance(e.target.value)}
           style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box",marginBottom:14}}/>
@@ -1609,6 +1652,9 @@ function App(){
       <button onClick={()=>{
         localStorage.setItem("hb_real_bal",realBalance);
         localStorage.setItem("hb_base_bal",baseBalance);
+        const refDate=todayStr();
+        localStorage.setItem("hb_konto_ref_date",refDate);
+        setKontoRefDate(refDate);
         const now=new Date().toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
         localStorage.setItem("hb_konto_date",now);
         setKontoDate(now);
