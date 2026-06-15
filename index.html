@@ -186,6 +186,69 @@ function Field({label,children}){
   </div>;
 }
 
+// ── DATE GROUPED LIST ───────────────────────────────────────────────────
+function DateGroupedList({entries,onDelete,isMobile}){
+  const EMOJI_MAP={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
+  const fmt=(n)=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtS=(n)=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
+  const fmtD=d=>{
+    if(!d)return"Kein Datum";
+    const dt=new Date(d+"T12:00:00");
+    const today=new Date().toISOString().slice(0,10);
+    const yd=new Date();yd.setDate(yd.getDate()-1);
+    if(d===today)return"Heute";
+    if(d===yd.toISOString().slice(0,10))return"Gestern";
+    return dt.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"});
+  };
+  // Group by date
+  const grouped={};
+  entries.forEach(e=>{const d=e.date||"?";if(!grouped[d])grouped[d]=[];grouped[d].push(e);});
+  const groups=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+  return(
+    <div>
+      {groups.map(date=>{
+        const day=grouped[date];
+        const dInc=day.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+        const dExp=day.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+        const dNet=dInc-dExp;
+        return(
+          <div key={date} style={{marginBottom:24}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:"1px solid #1e2d45"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:3,height:18,background:"#c9a227",borderRadius:2,flexShrink:0}}/>
+                <span style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{fmtD(date)}</span>
+                <span style={{fontSize:10,color:"#64748b",background:"#1e2d45",padding:"2px 7px",borderRadius:6}}>{day.length}</span>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                {dInc>0&&<span style={{fontSize:11,fontWeight:700,color:"#22c55e"}}>+€{fmtS(dInc)}</span>}
+                {dExp>0&&<span style={{fontSize:11,fontWeight:700,color:"#f87171"}}>-€{fmtS(dExp)}</span>}
+                <span style={{fontSize:11,fontWeight:800,color:dNet>=0?"#22c55e":"#f87171"}}>{dNet>=0?"+":""}€{fmtS(Math.abs(dNet))}</span>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:8}}>
+              {day.map(e=>(
+                <div key={e.id} style={{background:"#101828",border:"1px solid #1e2d45",borderRadius:12,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <div style={{fontSize:22,width:32,textAlign:"center"}}>{EMOJI_MAP[e.category]||"📝"}</div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13,color:"#e2e8f0"}}>{e.category}</div>
+                      {e.note&&<div style={{fontSize:11,color:"#64748b",marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note}</div>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?"#22c55e":"#f87171",whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmt(e.amount)}</span>
+                    <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── SIDEBAR ──────────────────────────────────────────────────────
 function SidebarContent({tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,onNav,onImport,onExport}){
   return<>
@@ -829,47 +892,7 @@ function App(){
                 <div style={{fontWeight:600,fontSize:15}}>Noch keine Buchungen</div>
                 <div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>
               </div>
-              :(()=>{
-                const groups=Object.entries(
-                  sortedMv.reduce((acc,e)=>{const d=e.date||"?";if(!acc[d])acc[d]=[];acc[d].push(e);return acc;},{})
-                ).sort((a,b)=>b[0].localeCompare(a[0]));
-                return<div>{groups.map(([date,dayEntries])=>{
-                  const dInc=dayEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-                  const dExp=dayEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
-                  const dNet=dInc-dExp;
-                  return<div key={date} style={{marginBottom:24}}>
-                    {/* Datums-Header */}
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${C.border}`}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <div style={{width:3,height:18,background:C.gold,borderRadius:2,flexShrink:0}}/>
-                        <span style={{fontSize:12,fontWeight:700,color:C.text}}>{fmtDate(date)}</span>
-                        <span style={{fontSize:10,color:C.muted,background:C.border,padding:"2px 7px",borderRadius:6}}>{dayEntries.length}</span>
-                      </div>
-                      <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                        {dInc>0&&<span style={{fontSize:11,fontWeight:700,color:C.green}}>+€{fmtShort(dInc)}</span>}
-                        {dExp>0&&<span style={{fontSize:11,fontWeight:700,color:C.red}}>-€{fmtShort(dExp)}</span>}
-                        <span style={{fontSize:11,fontWeight:800,color:dNet>=0?C.green:C.red}}>{dNet>=0?"+":""}€{fmtShort(dNet)}</span>
-                      </div>
-                    </div>
-                    {/* Buchungen des Tages */}
-                    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:8}}>
-                      {dayEntries.map(e=><div key={e.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                          <div style={{fontSize:22,width:32,textAlign:"center"}}>{EMOJI[e.category]||"📝"}</div>
-                          <div>
-                            <div style={{fontWeight:700,fontSize:13}}>{e.category}</div>
-                            {e.note&&<div style={{fontSize:11,color:C.muted,marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note}</div>}
-                          </div>
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:8}}>
-                          <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?C.green:C.red,whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
-                          <button onClick={()=>delEntry(e.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
-                        </div>
-                      </div>)}
-                    </div>
-                  </div>;
-                })}</div>;
-              })()}
+              :<DateGroupedList entries={sortedMv} onDelete={delEntry} isMobile={isMobile}/>}
           </>}
 
           {/* ── KATEGORIEN ── */}
