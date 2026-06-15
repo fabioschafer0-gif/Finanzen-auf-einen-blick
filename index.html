@@ -492,22 +492,25 @@ function App(){
       const loadedEntries=(eR.data||[]).map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date}));
 
       if(loadedEntries.length>0){
+        // Supabase hat Daten -> verwenden + localStorage aktualisieren
         setEntries(loadedEntries);
-        // localStorage Backup aktualisieren
         try{localStorage.setItem("hb_entries_bak",JSON.stringify(loadedEntries));}catch{}
       } else {
-        // Supabase leer - localStorage Backup laden?
+        // Supabase leer -> localStorage Backup laden
         try{
           const bak=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");
           if(bak.length>0){
             setEntries(bak);
-            pop("⚠️ Buchungen aus Backup geladen – Sync läuft…");
-            // Re-Sync: Backup zu Supabase hochladen
-            sb.from('entries').insert(bak.map(e=>({...e,user_id:userId}))).then(({error})=>{
-              if(!error) pop("✅ Buchungen erfolgreich synchronisiert!");
-            });
+            pop(`⚠️ ${bak.length} Buchungen aus Backup – Supabase-Sync läuft…`);
+            // Re-Sync via upsert (kein Fehler bei bereits existierenden)
+            sb.from('entries')
+              .upsert(bak.map(e=>({...e,user_id:userId})),{onConflict:'id',ignoreDuplicates:true})
+              .then(({error})=>{
+                if(!error) pop("✅ Buchungen erfolgreich mit Cloud synchronisiert!");
+                else console.warn("Re-Sync Fehler:",error.message);
+              });
           }
-        }catch{}
+        }catch(bakErr){console.warn("Backup-Fehler:",bakErr);}
       }
 
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
@@ -615,23 +618,18 @@ function App(){
     if(!user){setShowLoginModal(true);return;}
     if(!form.amount||!form.category)return;
     const e={...form,id:uid(),amount:parseFloat(form.amount)};
-    setEntries(prev=>[...prev,e]);
+    // 1. Sofort in State + localStorage (immer zuverlässig)
+    setEntries(prev=>{
+      const next=[...prev,e];
+      try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
+      return next;
+    });
     setShowAdd(false);
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
     pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
-    sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
-      .then(({error})=>{
-        if(error){
-          setEntries(prev=>prev.filter(x=>x.id!==e.id));
-          pop("❌ Speichern fehlgeschlagen: "+error.message);
-        } else {
-          // Backup aktualisieren
-          setEntries(prev=>{
-            try{localStorage.setItem("hb_entries_bak",JSON.stringify(prev));}catch{}
-            return prev;
-          });
-        }
-      });
+    // 2. Supabase-Sync (upsert - kein Fehler bei Duplikaten)
+    sb.from('entries').upsert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date},{onConflict:'id',ignoreDuplicates:true})
+      .then(({error})=>{ if(error) console.warn("Supabase-Sync Fehler:",error.message); });
   };
   const delEntry=id=>{
     // Wenn Abo-Eintrag geloescht wird, last_processed auf diesen Monat setzen
@@ -652,7 +650,7 @@ function App(){
       return next;
     });
     pop("🗑️ Gelöscht");
-    sb.from('entries').delete().eq('id',id);
+    sb.from('entries').delete().eq('id',id).then(({error})=>{if(error) console.warn("Delete-Sync:",error.message);});
   };
 
   // ── ABOS
@@ -799,9 +797,14 @@ function App(){
       return{id:uid(),date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
     }).filter(Boolean);
     if(!user){setShowLoginModal(true);return;}
-    setEntries(prev=>[...prev,...newE]);
+    setEntries(prev=>{
+      const next=[...prev,...newE];
+      try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
+      return next;
+    });
     if(newE.length>0&&user){
-      sb.from('entries').insert(newE.map(e=>({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})));
+      sb.from('entries').upsert(newE.map(e=>({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})),{onConflict:'id',ignoreDuplicates:true})
+        .then(({error})=>{if(error) console.warn("Import-Sync:",error.message);});
     }
     setShowImport(false);setCsvStep("upload");setCsvRaw([]);setCsvHeaders([]);
     pop(`✅ ${newE.length} Transaktionen importiert!`);
