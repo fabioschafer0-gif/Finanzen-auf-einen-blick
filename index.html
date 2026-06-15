@@ -706,6 +706,7 @@ function App(){
   const saveDepotEntry=()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)return;
+    setShowDepotDlg(false); // Sofort schließen – verhindert Doppel-Klick
     const entry={name:dForm.name,ticker:dForm.ticker.toUpperCase().trim(),units:parseFloat(dForm.units),avgPrice:parseFloat(String(dForm.avgPrice).replace(",","."))};
     if(editDepotId){
       const upd={...entry,id:editDepotId};
@@ -719,7 +720,6 @@ function App(){
         .then(({error})=>{if(error) pop("❌ "+error.message);});
       pop("💹 ETF hinzugefügt!");
     }
-    setShowDepotDlg(false);
     fetchPrice(entry.ticker);
   };
   const delDepotEntry=id=>{
