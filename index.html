@@ -491,27 +491,28 @@ function App(){
 
       const loadedEntries=(eR.data||[]).map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date}));
 
-      if(loadedEntries.length>0){
-        // Supabase hat Daten -> verwenden + localStorage aktualisieren
-        setEntries(loadedEntries);
-        try{localStorage.setItem("hb_entries_bak",JSON.stringify(loadedEntries));}catch{}
-      } else {
-        // Supabase leer -> localStorage Backup laden
-        try{
-          const bak=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");
-          if(bak.length>0){
-            setEntries(bak);
-            pop(`⚠️ ${bak.length} Buchungen aus Backup – Supabase-Sync läuft…`);
-            // Re-Sync via upsert (kein Fehler bei bereits existierenden)
-            sb.from('entries')
-              .upsert(bak.map(e=>({...e,user_id:userId})),{onConflict:'id',ignoreDuplicates:true})
-              .then(({error})=>{
-                if(!error) pop("✅ Buchungen erfolgreich mit Cloud synchronisiert!");
-                else console.warn("Re-Sync Fehler:",error.message);
-              });
-          }
-        }catch(bakErr){console.warn("Backup-Fehler:",bakErr);}
+      // Supabase-IDs sammeln
+      const sbIds=new Set(loadedEntries.map(e=>e.id));
+      // localStorage Backup holen
+      let localEntries=[];
+      try{localEntries=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");}catch{}
+      // Lokale Eintraege die NICHT in Supabase sind (manuell hinzugefuegt aber nicht sync'd)
+      const missingInSb=localEntries.filter(e=>!sbIds.has(e.id)&&!e.id.startsWith("abo-"));
+      if(missingInSb.length>0){
+        // Fehlende Eintraege zu Supabase hochladen
+        pop(`⬆️ ${missingInSb.length} fehlende Buchungen werden synchronisiert…`);
+        const{error:syncErr}=await sb.from('entries')
+          .insert(missingInSb.map(e=>({...e,user_id:userId})));
+        if(!syncErr){
+          pop("✅ Alle Buchungen synchronisiert!");
+        } else {
+          console.warn("Sync-Fehler:",syncErr.message);
+        }
       }
+      // Alles zusammenfuehren: Supabase + fehlende lokale
+      const allEntries=[...loadedEntries,...missingInSb];
+      setEntries(allEntries);
+      try{localStorage.setItem("hb_entries_bak",JSON.stringify(allEntries));}catch{}
 
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
       else setGoals(INIT_GOALS);
@@ -614,11 +615,11 @@ function App(){
   },[depot.length]);
 
   // ── BUCHUNGEN ────────────────────────────────────────────────
-  const addEntry=()=>{
+  const addEntry=async()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!form.amount||!form.category)return;
     const e={...form,id:uid(),amount:parseFloat(form.amount)};
-    // 1. Sofort in State + localStorage (immer zuverlässig)
+    // 1. Sofort in State + localStorage
     setEntries(prev=>{
       const next=[...prev,e];
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
@@ -626,10 +627,13 @@ function App(){
     });
     setShowAdd(false);
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
-    pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
-    // 2. Supabase-Sync (upsert - kein Fehler bei Duplikaten)
-    sb.from('entries').upsert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date},{onConflict:'id',ignoreDuplicates:true})
-      .then(({error})=>{ if(error) console.warn("Supabase-Sync Fehler:",error.message); });
+    // 2. Supabase awaited - sichtbarer Fehler bei Problemen
+    const{error}=await sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date});
+    if(error){
+      pop("❌ Supabase: "+error.message);
+    } else {
+      pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
+    }
   };
   const delEntry=id=>{
     // Wenn Abo-Eintrag geloescht wird, last_processed auf diesen Monat setzen
