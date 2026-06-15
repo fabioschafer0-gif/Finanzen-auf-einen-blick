@@ -466,14 +466,21 @@ function App(){
     const newEntries=toBook.map(s=>{
       const maxDay=new Date(year,now.getMonth()+1,0).getDate();
       const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
-      return{id:uid(),user_id:userId,type:"expense",category:s.category,amount:s.amount,note:`${s.name} (Abo)`,date:d};
+      // Deterministische ID: abo-[subId]-[monat] -> Datenbank verhindert Duplikate automatisch
+      return{id:`abo-${s.id}-${currentMonth}`,user_id:userId,type:"expense",category:s.category,amount:s.amount,note:`${s.name} (Abo)`,date:d};
     });
 
-    const{error}=await sb.from('entries').insert(newEntries);
+    // upsert mit ignoreDuplicates: existiert die ID schon -> wird ignoriert (kein Duplikat moeglich)
+    const{error}=await sb.from('entries').upsert(newEntries,{onConflict:'id',ignoreDuplicates:true});
     if(!error){
-      setEntries(prev=>[...prev,...newEntries.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]);
+      // Nur neue Eintraege zum State hinzufuegen (die noch nicht drin sind)
+      setEntries(prev=>{
+        const existingIds=new Set(prev.map(e=>e.id));
+        const truly_new=newEntries.filter(e=>!existingIds.has(e.id));
+        return truly_new.length>0?[...prev,...truly_new.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]:prev;
+      });
       const t=toBook.length;
-      setTimeout(()=>pop(`🔄 ${t} Abo${t>1?"s":""} für ${currentMonth} gebucht!`),600);
+      if(t>0) setTimeout(()=>pop(`🔄 ${t} Abo${t>1?"s":""} für ${currentMonth} gebucht!`),600);
     }
   };
 
@@ -1057,7 +1064,25 @@ function App(){
               </div>;
             })()}
             {/* Actions */}
-            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <button onClick={async()=>{
+                // Duplikate aus entries bereinigen (gleiche Notiz + selber Monat)
+                const now=new Date();
+                const cm=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+                const aboEntries=entries.filter(e=>e.date&&e.date.startsWith(cm)&&(e.note||"").endsWith("(Abo)"));
+                const seen=new Map();
+                const toDelete=[];
+                aboEntries.forEach(e=>{
+                  if(seen.has(e.note)) toDelete.push(e.id);
+                  else seen.set(e.note,e.id);
+                });
+                if(toDelete.length===0){pop("✅ Keine Duplikate gefunden");return;}
+                await Promise.all(toDelete.map(id=>sb.from('entries').delete().eq('id',id)));
+                setEntries(prev=>prev.filter(e=>!toDelete.includes(e.id)));
+                pop(`🧹 ${toDelete.length} Duplikat${toDelete.length>1?"e":""} entfernt`);
+              }} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",borderRadius:9,cursor:"pointer",fontWeight:500}}>
+                🧹 Duplikate bereinigen
+              </button>
               <button onClick={openNewSub} style={{background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",color:"#080e1a",fontSize:13,padding:"9px 18px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Abo hinzufügen</button>
             </div>
             {/* List */}
