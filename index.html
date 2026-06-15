@@ -58,6 +58,16 @@ const fmtMonth = m=>new Date(m+"-01").toLocaleDateString("de-DE",{month:"long",y
 const todayStr = ()=>new Date().toISOString().slice(0,10);
 const thisMonth= ()=>new Date().toISOString().slice(0,7);
 const uid      = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+const fmtDate  = d=>{
+  if(!d)return"Kein Datum";
+  const dt=new Date(d+"T12:00:00");
+  const today=todayStr();
+  const yd=new Date();yd.setDate(yd.getDate()-1);
+  const yStr=yd.toISOString().slice(0,10);
+  if(d===today)return"Heute";
+  if(d===yStr)return"Gestern";
+  return dt.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+};
 
 // ── AUTO-KATEGORISIERUNG ─────────────────────────────────────────
 function autoCategory(note,type){
@@ -381,7 +391,8 @@ function App(){
     setShowAdd(false);
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
     pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
-    sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date});
+    sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
+      .then(({error})=>{if(error){setEntries(prev=>prev.filter(x=>x.id!==e.id));pop("❌ Speichern fehlgeschlagen: "+error.message);}});
   };
   const delEntry=id=>{
     setEntries(prev=>prev.filter(e=>e.id!==id));
@@ -403,7 +414,8 @@ function App(){
     } else {
       const ng={id:"g"+uid(),...gForm,target:parseFloat(gForm.target),saved:gForm.saved?parseFloat(gForm.saved):0};
       setGoals(prev=>[...prev,ng]);
-      sb.from('goals').insert({id:ng.id,user_id:user.id,name:ng.name,icon:ng.icon,color:ng.color,target:ng.target,saved:ng.saved});
+      sb.from('goals').insert({id:ng.id,user_id:user.id,name:ng.name,icon:ng.icon,color:ng.color,target:ng.target,saved:ng.saved})
+        .then(({error})=>{if(error) pop("❌ "+error.message);});
       pop("🎯 Neues Ziel!");
     }
     setShowGoalDlg(false);
@@ -439,7 +451,8 @@ function App(){
     } else {
       const ni={id:"d"+uid(),...entry};
       setDepot(prev=>[...prev,ni]);
-      sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice});
+      sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice})
+        .then(({error})=>{if(error) pop("❌ "+error.message);});
       pop("💹 ETF hinzugefügt!");
     }
     setShowDepotDlg(false);
@@ -740,21 +753,47 @@ function App(){
                 <div style={{fontWeight:600,fontSize:15}}>Noch keine Buchungen</div>
                 <div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>
               </div>
-              :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:10}}>
-                {sortedMv.map(e=><div key={e.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                    <div style={{fontSize:24,width:34,textAlign:"center"}}>{EMOJI[e.category]||"📝"}</div>
-                    <div>
-                      <div style={{fontWeight:700,fontSize:13}}>{e.category}</div>
-                      <div style={{fontSize:11,color:C.muted,marginTop:2,maxWidth:isMobile?160:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note||e.date}</div>
+              :(()=>{
+                const groups=Object.entries(
+                  sortedMv.reduce((acc,e)=>{const d=e.date||"?";if(!acc[d])acc[d]=[];acc[d].push(e);return acc;},{})
+                ).sort((a,b)=>b[0].localeCompare(a[0]));
+                return<div>{groups.map(([date,dayEntries])=>{
+                  const dInc=dayEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+                  const dExp=dayEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+                  const dNet=dInc-dExp;
+                  return<div key={date} style={{marginBottom:24}}>
+                    {/* Datums-Header */}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${C.border}`}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:3,height:18,background:C.gold,borderRadius:2,flexShrink:0}}/>
+                        <span style={{fontSize:12,fontWeight:700,color:C.text}}>{fmtDate(date)}</span>
+                        <span style={{fontSize:10,color:C.muted,background:C.border,padding:"2px 7px",borderRadius:6}}>{dayEntries.length}</span>
+                      </div>
+                      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                        {dInc>0&&<span style={{fontSize:11,fontWeight:700,color:C.green}}>+€{fmtShort(dInc)}</span>}
+                        {dExp>0&&<span style={{fontSize:11,fontWeight:700,color:C.red}}>-€{fmtShort(dExp)}</span>}
+                        <span style={{fontSize:11,fontWeight:800,color:dNet>=0?C.green:C.red}}>{dNet>=0?"+":""}€{fmtShort(dNet)}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?C.green:C.red,whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
-                    <button onClick={()=>delEntry(e.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:14,padding:"2px 6px"}}>✕</button>
-                  </div>
-                </div>)}
-              </div>}
+                    {/* Buchungen des Tages */}
+                    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:8}}>
+                      {dayEntries.map(e=><div key={e.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                          <div style={{fontSize:22,width:32,textAlign:"center"}}>{EMOJI[e.category]||"📝"}</div>
+                          <div>
+                            <div style={{fontWeight:700,fontSize:13}}>{e.category}</div>
+                            {e.note&&<div style={{fontSize:11,color:C.muted,marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note}</div>}
+                          </div>
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?C.green:C.red,whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmtAmt(e.amount)}</span>
+                          <button onClick={()=>delEntry(e.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
+                        </div>
+                      </div>)}
+                    </div>
+                  </div>;
+                })}</div>;
+              })()}
           </>}
 
           {/* ── KATEGORIEN ── */}
