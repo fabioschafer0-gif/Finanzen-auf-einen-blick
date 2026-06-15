@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:#080e1a;font-family:system-ui,-apple-system,sans-serif;color:#e2e8f0;}
@@ -23,6 +24,9 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
+
+const { createClient } = window.supabase;
+const sb = createClient('https://hqdqcufkqjialfxpfsgc.supabase.co','eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxZHFjdWZrcWppYWxmeHBmc2djIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1MTg3MzIsImV4cCI6MjA5NzA5NDczMn0.sLAO-Gi2J-xkLOgdKFIVXZMtIjFHX8fAZ_P0HU_9bvs');
 
 // ── TOKENS ──────────────────────────────────────────────────────
 const C = {
@@ -276,12 +280,25 @@ function App(){
   const [gForm, setGForm] = useState({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});
   const [dForm, setDForm] = useState({name:"",ticker:"",units:"",avgPrice:""});
 
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const isMobile = windowWidth < 768;
 
   useEffect(()=>{
-    load();
-    // ── iOS SHORTCUT URL-INTEGRATION ─────────────────────────
-    // Format: ?add=1&amount=25.00&type=expense&note=MSCI+World&cat=Sonstiges
+    sb.auth.getSession().then(({data:{session}})=>{
+      const u=session?.user??null;
+      setUser(u);
+      if(u) loadFromCloud(u.id);
+      else { setLoading(false); }
+      setAuthLoading(false);
+    });
+    const {data:{subscription}} = sb.auth.onAuthStateChange((_ev,session)=>{
+      const u=session?.user??null;
+      setUser(u);
+      if(u) loadFromCloud(u.id);
+      else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setLoading(false); }
+    });
     const p=new URLSearchParams(window.location.search);
     if(p.get("add")==="1"){
       const amount=(p.get("amount")||"").replace(",",".");
@@ -291,23 +308,29 @@ function App(){
       setTimeout(()=>{
         setForm({type,amount,note,category:cat,date:todayStr()});
         setShowAdd(true);
-      },400);
+      },600);
       window.history.replaceState({},"",window.location.pathname);
     }
     const onResize=()=>setWindowWidth(window.innerWidth);
     window.addEventListener("resize",onResize);
-    return()=>window.removeEventListener("resize",onResize);
+    return()=>{subscription.unsubscribe();window.removeEventListener("resize",onResize);};
   },[]);
 
-  const load=()=>{
-    try{const _e=localStorage.getItem("hb_e");if(_e)setEntries(JSON.parse(_e));}catch{}
-    try{const _g=localStorage.getItem("hb_goals");if(_g)setGoals(JSON.parse(_g));}catch{}
-    try{const _d=localStorage.getItem("hb_depot");if(_d)setDepot(JSON.parse(_d));}catch{}
+  const loadFromCloud=async(userId)=>{
+    setLoading(true);
+    try{
+      const [eR,gR,dR]=await Promise.all([
+        sb.from('entries').select('*').eq('user_id',userId),
+        sb.from('goals').select('*').eq('user_id',userId),
+        sb.from('depot').select('*').eq('user_id',userId)
+      ]);
+      if(eR.data) setEntries(eR.data.map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date})));
+      if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
+      else setGoals(INIT_GOALS);
+      if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
+    }catch(e){console.error("loadFromCloud:",e);}
     setLoading(false);
   };
-  const saveE=arr=>{setEntries(arr);try{localStorage.setItem("hb_e",JSON.stringify(arr));}catch{}};
-  const saveG=arr=>{setGoals(arr);try{localStorage.setItem("hb_goals",JSON.stringify(arr));}catch{}};
-  const saveD=arr=>{setDepot(arr);try{localStorage.setItem("hb_depot",JSON.stringify(arr));}catch{}};
   const pop=msg=>{setToast(msg);setTimeout(()=>setToast(null),2800);};
 
   // ── KURS ABRUFEN (Yahoo Finance) ─────────────────────────────
@@ -352,24 +375,51 @@ function App(){
   const addEntry=()=>{
     if(!form.amount||!form.category)return;
     const e={...form,id:uid(),amount:parseFloat(form.amount)};
-    saveE([...entries,e]);setShowAdd(false);
+    setEntries(prev=>[...prev,e]);
+    setShowAdd(false);
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
     pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
+    sb.from('entries').insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date});
   };
-  const delEntry=id=>{saveE(entries.filter(e=>e.id!==id));pop("🗑️ Gelöscht");};
+  const delEntry=id=>{
+    setEntries(prev=>prev.filter(e=>e.id!==id));
+    pop("🗑️ Gelöscht");
+    sb.from('entries').delete().eq('id',id);
+  };
 
   // ── ZIELE ────────────────────────────────────────────────────
   const openNew=()=>{setEditId(null);setGForm({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});setShowGoalDlg(true);};
   const openEdit=g=>{setEditId(g.id);setGForm({name:g.name,icon:g.icon,color:g.color,target:String(g.target),saved:String(g.saved)});setShowGoalDlg(true);};
   const saveGoal=()=>{
     if(!gForm.name||!gForm.target)return;
-    let arr;
-    if(editId){arr=goals.map(g=>g.id===editId?{...g,...gForm,target:parseFloat(gForm.target),saved:gForm.saved!==""?parseFloat(gForm.saved):g.saved}:g);pop("✅ Ziel aktualisiert");}
-    else{arr=[...goals,{id:"g"+uid(),...gForm,target:parseFloat(gForm.target),saved:gForm.saved?parseFloat(gForm.saved):0}];pop("🎯 Neues Ziel!");}
-    saveG(arr);setShowGoalDlg(false);
+    if(editId){
+      const upd={id:editId,...gForm,target:parseFloat(gForm.target),saved:gForm.saved!==""?parseFloat(gForm.saved):goals.find(g=>g.id===editId)?.saved||0};
+      setGoals(prev=>prev.map(g=>g.id===editId?upd:g));
+      sb.from('goals').upsert({id:upd.id,user_id:user.id,name:upd.name,icon:upd.icon,color:upd.color,target:upd.target,saved:upd.saved});
+      pop("✅ Ziel aktualisiert");
+    } else {
+      const ng={id:"g"+uid(),...gForm,target:parseFloat(gForm.target),saved:gForm.saved?parseFloat(gForm.saved):0};
+      setGoals(prev=>[...prev,ng]);
+      sb.from('goals').insert({id:ng.id,user_id:user.id,name:ng.name,icon:ng.icon,color:ng.color,target:ng.target,saved:ng.saved});
+      pop("🎯 Neues Ziel!");
+    }
+    setShowGoalDlg(false);
   };
-  const delGoal=id=>{if(goals.length<=1){pop("❌ Mindestens ein Ziel");return;}saveG(goals.filter(g=>g.id!==id));pop("🗑️ Ziel gelöscht");};
-  const addSaved=(id,delta)=>{saveG(goals.map(g=>g.id===id?{...g,saved:Math.max(0,g.saved+delta)}:g));pop(`+€${fmtShort(delta)} eingetragen 💰`);};
+  const delGoal=id=>{
+    if(goals.length<=1){pop("❌ Mindestens ein Ziel");return;}
+    setGoals(prev=>prev.filter(g=>g.id!==id));
+    sb.from('goals').delete().eq('id',id);
+    pop("🗑️ Ziel gelöscht");
+  };
+  const addSaved=(id,delta)=>{
+    setGoals(prev=>prev.map(g=>{
+      if(g.id!==id)return g;
+      const ns=Math.max(0,g.saved+delta);
+      sb.from('goals').update({saved:ns}).eq('id',id);
+      return{...g,saved:ns};
+    }));
+    pop(`+€${fmtShort(delta)} eingetragen 💰`);
+  };
 
   // ── DEPOT ────────────────────────────────────────────────────
   const openNewDepot=()=>{setEditDepotId(null);setDForm({name:"",ticker:"",units:"",avgPrice:""});setShowDepotDlg(true);};
@@ -377,13 +427,25 @@ function App(){
   const saveDepotEntry=()=>{
     if(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)return;
     const entry={name:dForm.name,ticker:dForm.ticker.toUpperCase().trim(),units:parseFloat(dForm.units),avgPrice:parseFloat(String(dForm.avgPrice).replace(",","."))};
-    let arr;
-    if(editDepotId){arr=depot.map(e=>e.id===editDepotId?{...e,...entry}:e);pop("✅ Position aktualisiert");}
-    else{arr=[...depot,{id:"d"+uid(),...entry}];pop("💹 ETF hinzugefügt!");}
-    saveD(arr);setShowDepotDlg(false);
+    if(editDepotId){
+      const upd={...entry,id:editDepotId};
+      setDepot(prev=>prev.map(e=>e.id===editDepotId?upd:e));
+      sb.from('depot').upsert({id:upd.id,user_id:user.id,name:upd.name,ticker:upd.ticker,units:upd.units,avg_price:upd.avgPrice});
+      pop("✅ Position aktualisiert");
+    } else {
+      const ni={id:"d"+uid(),...entry};
+      setDepot(prev=>[...prev,ni]);
+      sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice});
+      pop("💹 ETF hinzugefügt!");
+    }
+    setShowDepotDlg(false);
     fetchPrice(entry.ticker);
   };
-  const delDepotEntry=id=>{saveD(depot.filter(e=>e.id!==id));pop("🗑️ Position gelöscht");};
+  const delDepotEntry=id=>{
+    setDepot(prev=>prev.filter(e=>e.id!==id));
+    sb.from('depot').delete().eq('id',id);
+    pop("🗑️ Position gelöscht");
+  };
 
   const depotTotal  = depot.reduce((s,e)=>s+(priceData[e.ticker]??e.avgPrice)*e.units,0);
   const depotCost   = depot.reduce((s,e)=>s+e.avgPrice*e.units,0);
@@ -415,7 +477,10 @@ function App(){
       const type=amt>=0?"income":"expense";
       return{id:uid(),date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
     }).filter(Boolean);
-    saveE([...entries,...newE]);
+    setEntries(prev=>[...prev,...newE]);
+    if(newE.length>0&&user){
+      sb.from('entries').insert(newE.map(e=>({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})));
+    }
     setShowImport(false);setCsvStep("upload");setCsvRaw([]);setCsvHeaders([]);
     pop(`✅ ${newE.length} Transaktionen importiert!`);
   };
@@ -477,6 +542,25 @@ function App(){
     return filtered.length > 1 ? combined : null;
   })();
 
+  if(authLoading)return<div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Verbinde...</div>;
+
+  if(!user)return(
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{textAlign:"center",maxWidth:380}}>
+        <div style={{fontSize:64,marginBottom:20}}>📒</div>
+        <div style={{fontSize:28,fontWeight:900,color:C.text,marginBottom:8,letterSpacing:-0.5}}>Haushaltsbuch</div>
+        <div style={{fontSize:14,color:C.muted,marginBottom:10}}>Deine Finanzen auf einen Blick</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:36,lineHeight:1.7}}>Melde dich an um deine Daten sicher in der Cloud zu speichern – auf allen Geräten verfügbar.</div>
+        <button onClick={()=>sb.auth.signInWithOAuth({provider:'github',options:{redirectTo:'https://finanzen-auf-einen-blick.vercel.app'}})}
+          style={{background:"#24292e",color:"#fff",border:"none",padding:"15px 32px",borderRadius:12,fontSize:15,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",gap:12,margin:"0 auto",boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          Mit GitHub anmelden
+        </button>
+        <div style={{fontSize:11,color:C.muted,marginTop:20}}>Kostenlos · Keine Kreditkarte · Deine Daten gehören dir</div>
+      </div>
+    </div>
+  );
+
   if(loading)return<div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:18}}>⏳ Lade Daten...</div>;
 
   const sidebarProps={tab,bal,inc,exp,month,goals,totalSaved,totalTarget,depotTotal,
@@ -508,6 +592,7 @@ function App(){
           {!isMobile&&<div style={{display:"flex",gap:10}}>
             <button onClick={openImport} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.mutedLight,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>📂 Importieren</button>
             <button onClick={exportCSV}  style={{background:"transparent",border:`1px solid ${C.green}55`,color:C.green,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>💾 Exportieren</button>
+            <button onClick={()=>sb.auth.signOut()} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:500}}>Abmelden</button>
             <button onClick={openNew}    style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Neues Ziel</button>
           </div>}
         </div>
