@@ -491,25 +491,27 @@ function App(){
 
       const loadedEntries=(eR.data||[]).map(r=>({id:r.id,type:r.type,category:r.category,amount:Number(r.amount),note:r.note||"",date:r.date}));
 
+      // Blacklist: absichtlich gelöschte IDs nicht re-uploaden
+      let deletedIds=new Set();
+      try{deletedIds=new Set(JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]"));}catch{}
       // Supabase-IDs sammeln
       const sbIds=new Set(loadedEntries.map(e=>e.id));
       // localStorage Backup holen
       let localEntries=[];
       try{localEntries=JSON.parse(localStorage.getItem("hb_entries_bak")||"[]");}catch{}
-      // Lokale Eintraege die NICHT in Supabase sind (manuell hinzugefuegt aber nicht sync'd)
-      const missingInSb=localEntries.filter(e=>!sbIds.has(e.id)&&!e.id.startsWith("abo-"));
+      // Lokale Einträge die NICHT in Supabase und NICHT gelöscht sind
+      const missingInSb=localEntries.filter(e=>
+        !sbIds.has(e.id) &&
+        !deletedIds.has(e.id) &&
+        !e.id.startsWith("abo-")
+      );
       if(missingInSb.length>0){
-        // Fehlende Eintraege zu Supabase hochladen
         pop(`⬆️ ${missingInSb.length} fehlende Buchungen werden synchronisiert…`);
         const{error:syncErr}=await sb.from('entries')
           .insert(missingInSb.map(e=>({...e,user_id:userId})));
-        if(!syncErr){
-          pop("✅ Alle Buchungen synchronisiert!");
-        } else {
-          console.warn("Sync-Fehler:",syncErr.message);
-        }
+        if(syncErr) console.warn("Sync-Fehler:",syncErr.message);
+        else pop("✅ Buchungen synchronisiert!");
       }
-      // Alles zusammenfuehren: Supabase + fehlende lokale
       const allEntries=[...loadedEntries,...missingInSb];
       setEntries(allEntries);
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(allEntries));}catch{}
@@ -640,7 +642,7 @@ function App(){
       pop(e.type==="income"?"✅ Einnahme gespeichert":"✅ Ausgabe gespeichert");
     }
   };
-  const delEntry=id=>{
+  const delEntry=async(id)=>{
     // Wenn Abo-Eintrag geloescht wird, last_processed auf diesen Monat setzen
     const entry=entries.find(e=>e.id===id);
     if(entry&&entry.note&&entry.note.includes("(Abo)")){
@@ -653,13 +655,20 @@ function App(){
         sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',matchingSub.id);
       }
     }
+    // ID zur Blacklist hinzufügen (verhindert Re-Upload nach Löschung)
+    try{
+      const bl=JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]");
+      bl.push(id);
+      localStorage.setItem("hb_deleted_ids",JSON.stringify(bl.slice(-500))); // max 500
+    }catch{}
     setEntries(prev=>{
       const next=prev.filter(e=>e.id!==id);
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
       return next;
     });
     pop("🗑️ Gelöscht");
-    sb.from('entries').delete().eq('id',id).then(({error})=>{if(error) console.warn("Delete-Sync:",error.message);});
+    const{error:delErr}=await sb.from('entries').delete().eq('id',id);
+    if(delErr) pop("⚠️ Lösch-Fehler: "+delErr.message);
   };
 
   // ── ABOS
