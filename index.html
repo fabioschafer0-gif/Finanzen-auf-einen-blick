@@ -280,6 +280,20 @@ function App(){
 
   useEffect(()=>{
     load();
+    // ── iOS SHORTCUT URL-INTEGRATION ─────────────────────────
+    // Format: ?add=1&amount=25.00&type=expense&note=MSCI+World&cat=Sonstiges
+    const p=new URLSearchParams(window.location.search);
+    if(p.get("add")==="1"){
+      const amount=(p.get("amount")||"").replace(",",".");
+      const type=p.get("type")||"expense";
+      const note=p.get("note")||"";
+      const cat=p.get("cat")||autoCategory(note,type);
+      setTimeout(()=>{
+        setForm({type,amount,note,category:cat,date:todayStr()});
+        setShowAdd(true);
+      },400);
+      window.history.replaceState({},"",window.location.pathname);
+    }
     const onResize=()=>setWindowWidth(window.innerWidth);
     window.addEventListener("resize",onResize);
     return()=>window.removeEventListener("resize",onResize);
