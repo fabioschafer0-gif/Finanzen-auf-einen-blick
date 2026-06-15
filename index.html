@@ -435,7 +435,7 @@ function App(){
   const [budgetVal,   setBudgetVal]   = useState("");
   const [showSubDlg,  setShowSubDlg]  = useState(false);
   const [editSubId,   setEditSubId]   = useState(null);
-  const [sForm,       setSForm]       = useState({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});
+  const [sForm,       setSForm]       = useState({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true,sub_type:"expense"});
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -560,7 +560,7 @@ function App(){
       .gte('date',`${currentMonth}-01`)
       .lte('date',`${currentMonth}-31`);
 
-    const alreadyBooked=new Set((existing||[]).map(e=>e.note));
+    const alreadyBooked=new Set((existing||[]).filter(e=>(e.note||"").match(/\((Abo|Einnahme)\)$/)).map(e=>e.note));
     const toBook=activeSubs.filter(s=>!alreadyBooked.has(`${s.name} (Abo)`));
     if(toBook.length===0) return;
 
@@ -568,7 +568,8 @@ function App(){
       const maxDay=new Date(year,now.getMonth()+1,0).getDate();
       const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
       // Deterministische ID: abo-[subId]-[monat] -> Datenbank verhindert Duplikate automatisch
-      return{id:`abo-${s.id}-${currentMonth}`,user_id:userId,type:"expense",category:s.category,amount:s.amount,note:`${s.name} (Abo)`,date:d};
+      const isIncome=INCOME_CAT.includes(s.category);
+      return{id:`abo-${s.id}-${currentMonth}`,user_id:userId,type:isIncome?"income":"expense",category:s.category,amount:s.amount,note:`${s.name} (${isIncome?"Einnahme":"Abo"})`,date:d};
     });
 
     // upsert mit ignoreDuplicates: existiert die ID schon -> wird ignoriert (kein Duplikat moeglich)
@@ -679,8 +680,8 @@ function App(){
   };
 
   // ── ABOS
-  const openNewSub=()=>{setEditSubId(null);setSForm({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true});setShowSubDlg(true);};
-  const openEditSub=s=>{setEditSubId(s.id);setSForm({name:s.name,icon:s.icon,amount:String(s.amount),category:s.category,day_of_month:String(s.day_of_month),active:s.active});setShowSubDlg(true);};
+  const openNewSub=()=>{setEditSubId(null);setSForm({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true,sub_type:"expense"});setShowSubDlg(true);};
+  const openEditSub=s=>{setEditSubId(s.id);setSForm({name:s.name,icon:s.icon,amount:String(s.amount),category:s.category,day_of_month:String(s.day_of_month),active:s.active,sub_type:INCOME_CAT.includes(s.category)?"income":"expense"});setShowSubDlg(true);};
   const saveSub=()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!sForm.name||!sForm.amount)return;
@@ -871,6 +872,15 @@ function App(){
   const totalTarget = goals.reduce((s,g)=>s+g.target,0);
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
+
+  // Ausgaben-Trends: letzter Monat nach Kategorie
+  const lastMonthStr=(()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;})();
+  const lastMonthByCat=entries.filter(e=>e.date?.startsWith(lastMonthStr)&&e.type==="expense")
+    .reduce((a,e)=>{a[e.category]=(a[e.category]||0)+e.amount;return a;},{});
+
+  // Notfallgroschen
+  const avgMonthlyExp=(()=>{let t=0,n=0;for(let i=1;i<=3;i++){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;const x=entries.filter(e=>e.date?.startsWith(m)&&e.type==="expense").reduce((s,e)=>s+e.amount,0);if(x>0){t+=x;n++;}}return n>0?t/n:0;})();
+  const emergencyMonths=avgMonthlyExp>0?(totalSaved+depotTotal)/avgMonthlyExp:0;
 
   // Kontostand-Berechnung (nur Eintraege ab Referenzdatum)
   const baseBalNum = parseFloat(baseBalance)||0;
@@ -1146,6 +1156,21 @@ function App(){
               <div style={{fontSize:12,color:C.muted}}>Vergleiche deinen echten Kontostand mit deinen Buchungen</div>
             </div>}
 
+            {/* Notfallgroschen */}
+            {avgMonthlyExp>0&&<div style={{background:C.card,border:`1px solid ${emergencyMonths>=6?"#22c55e33":emergencyMonths>=3?"#f59e0b33":"#f8717133"}`,borderRadius:14,padding:isMobile?14:20,marginBottom:isMobile?14:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div style={{fontSize:12,fontWeight:700,color:C.mutedLight}}>🛡️ Notfallgroschen</div>
+                <span style={{fontSize:18,fontWeight:900,color:emergencyMonths>=6?C.green:emergencyMonths>=3?"#f59e0b":C.red}}>{emergencyMonths.toFixed(1)} <span style={{fontSize:11,fontWeight:400}}>Monate</span></span>
+              </div>
+              <div style={{height:8,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:8}}>
+                <div style={{height:"100%",width:`${Math.min(emergencyMonths/6*100,100)}%`,background:emergencyMonths>=6?C.green:emergencyMonths>=3?"#f59e0b":C.red,borderRadius:4}}/>
+              </div>
+              <div style={{fontSize:12,color:C.muted}}>
+                {emergencyMonths>=6?"✅ Sehr gut – du hast mehr als 6 Monate gedeckt":emergencyMonths>=3?"⚠️ Solide – Ziel sind 6+ Monate":"❌ Zu wenig – mindestens 3–6 Monate empfohlen"}
+              </div>
+              <div style={{fontSize:11,color:C.muted,marginTop:4}}>Ø Ausgaben: €{fmtShort(avgMonthlyExp)}/Monat · Ersparnisse: €{fmtShort(totalSaved+depotTotal)}</div>
+            </div>}
+
             {/* Monatsvergleich */}
             {entries.length>0&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:isMobile?14:20,marginBottom:isMobile?14:20}}>
               <div style={{fontSize:12,fontWeight:700,color:C.mutedLight,marginBottom:12}}>📊 6-Monats-Überblick</div>
@@ -1234,9 +1259,21 @@ function App(){
                   <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden",marginBottom:8}}>
                     <div style={{height:"100%",width:`${barWidth}%`,background:barColor,borderRadius:3}}/>
                   </div>
-                  <button onClick={()=>{setBudgetCat(cat);setBudgetVal(budget?String(budget):"");setShowBudgetDlg(true);}} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,padding:"3px 10px",borderRadius:6,cursor:"pointer"}}>
-                    {budget>0?"✏️ Budget ändern":"+ Budget setzen"}
-                  </button>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <button onClick={()=>{setBudgetCat(cat);setBudgetVal(budget?String(budget):"");setShowBudgetDlg(true);}} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,padding:"3px 10px",borderRadius:6,cursor:"pointer"}}>
+                      {budget>0?"✏️ Budget":"+ Budget"}
+                    </button>
+                    {(()=>{
+                      const last=lastMonthByCat[cat]||0;
+                      if(!last) return<span style={{fontSize:10,color:C.muted}}>Neu diesen Monat</span>;
+                      const diff=amt-last;
+                      const pct=Math.abs(Math.round((diff/last)*100));
+                      const up=diff>0;
+                      return<span style={{fontSize:11,fontWeight:700,color:up?C.red:C.green}}>
+                        {up?"↗":"↘"} {pct}% {up?"mehr":"weniger"} als letzten Monat
+                      </span>;
+                    })()}
+                  </div>
                 </div>;
               })}
             </div>
@@ -1350,7 +1387,11 @@ function App(){
                 <button onClick={openNewSub} style={{background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",color:"#080e1a",fontSize:14,padding:"13px 26px",borderRadius:11,cursor:"pointer",fontWeight:700}}>+ Erstes Abo hinzufügen</button>
               </div>
               :<div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12}}>
-                {[...subs].sort((a,b)=>b.amount-a.amount).map(s=>(
+                {/* Wiederkehrende Einnahmen */}
+              {subs.some(s=>INCOME_CAT.includes(s.category))&&<>
+                <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:8,marginTop:4,textTransform:"uppercase",letterSpacing:1}}>💰 Wiederkehrende Einnahmen</div>
+                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:16}}>
+                  {subs.filter(s=>INCOME_CAT.includes(s.category)).map(s=>(
                   <div key={s.id} style={{background:C.card,border:`1px solid ${s.active?C.border:C.border+"88"}`,borderRadius:14,padding:16,opacity:s.active?1:0.55}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -1712,11 +1753,19 @@ function App(){
     </Overlay>}
 
     {/* ABO MODAL */}
-    {showSubDlg&&<Overlay title={editSubId?"Abo bearbeiten":"Neues Abo"} onClose={()=>setShowSubDlg(false)}>
+    {showSubDlg&&<Overlay title={editSubId?"Bearbeiten":sForm.sub_type==="income"?"Neue Einnahme":"Neues Abo"} onClose={()=>setShowSubDlg(false)}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+        {["expense","income"].map(t=><button key={t} onClick={()=>setSForm(f=>({...f,sub_type:t,category:t==="income"?"Gehalt":"Freizeit"}))} style={{padding:"10px 0",borderRadius:10,border:`2px solid ${sForm.sub_type===t?(t==="income"?C.green:C.red):C.border}`,background:sForm.sub_type===t?(t==="income"?"#0d200d":"#200d0d"):"transparent",color:sForm.sub_type===t?(t==="income"?C.green:C.red):C.muted,cursor:"pointer",fontWeight:700,fontSize:13}}>
+          {t==="income"?"💰 Einnahme":"📤 Ausgabe"}
+        </button>)}
+      </div>
       <div style={{marginBottom:14}}>
         <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8}}>Schnellauswahl</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {SUB_PRESETS.map(p=><button key={p.name} onClick={()=>setSForm(f=>({...f,name:p.name,icon:p.icon,amount:String(p.amount),category:p.category}))} style={{padding:"5px 10px",background:sForm.name===p.name?`${C.gold}22`:C.bg,border:`1px solid ${sForm.name===p.name?C.gold:C.border}`,borderRadius:8,color:sForm.name===p.name?C.gold:C.mutedLight,fontSize:11,cursor:"pointer"}}>
+          {(sForm.sub_type==="income"
+            ?[{name:"Gehalt",icon:"💼",amount:"",category:"Gehalt"},{name:"Nebenjob",icon:"🔧",amount:"",category:"Nebeneinkommen"},{name:"Freelance",icon:"💻",amount:"",category:"Freiberuflich"},{name:"Mieteinnahmen",icon:"🏠",amount:"",category:"Nebeneinkommen"},{name:"Kindergeld",icon:"👶",amount:"250",category:"Sonstiges"}]
+            :SUB_PRESETS
+          ).map(p=><button key={p.name} onClick={()=>setSForm(f=>({...f,name:f.name||p.name,icon:p.icon,amount:p.amount||f.amount,category:p.category}))} style={{padding:"5px 10px",background:sForm.name===p.name?`${sForm.sub_type==="income"?C.green:C.gold}22`:C.bg,border:`1px solid ${sForm.name===p.name?(sForm.sub_type==="income"?C.green:C.gold):C.border}`,borderRadius:8,color:sForm.name===p.name?(sForm.sub_type==="income"?C.green:C.gold):C.mutedLight,fontSize:11,cursor:"pointer"}}>
             {p.icon} {p.name}
           </button>)}
         </div>
@@ -1744,7 +1793,7 @@ function App(){
       <div style={{marginTop:14}}>
         <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Kategorie</div>
         <select value={sForm.category} onChange={e=>setSForm(f=>({...f,category:e.target.value}))} style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",WebkitAppearance:"none",boxSizing:"border-box"}}>
-          {EXPENSE_CAT.map(cat=><option key={cat} value={cat}>{EMOJI[cat]?`${EMOJI[cat]} ${cat}`:cat}</option>)}
+          {(sForm.sub_type==="income"?INCOME_CAT:EXPENSE_CAT).map(cat=><option key={cat} value={cat}>{EMOJI[cat]?`${EMOJI[cat]} ${cat}`:cat}</option>)}
         </select>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginTop:16,padding:"12px 14px",background:C.bg,borderRadius:10}}>
