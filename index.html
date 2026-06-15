@@ -434,18 +434,25 @@ function App(){
   };
 
   const autoBookSubs=async(userId,loadedSubs,loadedEntries)=>{
-    if(bookedRef.current) return;  // Schon ausgefuehrt diese Session
+    if(bookedRef.current) return;
     bookedRef.current=true;
     const now=new Date();
     const currentMonth=now.toISOString().slice(0,7);
     const today=now.getDate();
-    const toBook=loadedSubs.filter(s=>
-      s.active&&
-      s.day_of_month<=today&&
-      s.last_processed!==currentMonth
-    );
+    const toBook=loadedSubs.filter(s=>s.active&&s.day_of_month<=today&&s.last_processed!==currentMonth);
     if(toBook.length===0) return;
-    // Pruefen ob bereits Abo-Eintraege fuer diesen Monat existieren (extra Sicherheit)
+
+    // SCHRITT 1: last_processed ZUERST setzen (verhindert Doppelbuchung beim Neuladen)
+    const updateRes=await Promise.all(
+      toBook.map(s=>sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',s.id).eq('user_id',userId))
+    );
+    const updateErr=updateRes.find(r=>r.error);
+    if(updateErr){ pop('❌ Abo-Sync Fehler: '+updateErr.error.message); return; }
+
+    // State sofort aktualisieren
+    setSubs(prev=>prev.map(s=>toBook.find(t=>t.id===s.id)?{...s,last_processed:currentMonth}:s));
+
+    // SCHRITT 2: Einträge erstellen
     const newEntries=toBook.map(s=>{
       const maxDay=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
       const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
@@ -453,9 +460,7 @@ function App(){
     });
     const {error}=await sb.from('entries').insert(newEntries);
     if(!error){
-      await Promise.all(toBook.map(s=>sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',s.id)));
       setEntries(prev=>[...prev,...newEntries.map(e=>({id:e.id,type:e.type,category:e.category,amount:e.amount,note:e.note,date:e.date}))]);
-      setSubs(prev=>prev.map(s=>toBook.find(t=>t.id===s.id)?{...s,last_processed:currentMonth}:s));
       const t=toBook.length;
       setTimeout(()=>pop(`🔄 ${t} Abo${t>1?"s":""} automatisch für ${currentMonth} gebucht!`),600);
     }
