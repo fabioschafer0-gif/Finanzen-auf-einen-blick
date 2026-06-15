@@ -69,7 +69,7 @@ const fmtShort = n=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
 const fmtPct   = n=>(n>=0?"+":"")+n.toFixed(2)+"%";
 const fmtMonth = m=>new Date(m+"-01").toLocaleDateString("de-DE",{month:"long",year:"numeric"});
 const todayStr = ()=>new Date().toISOString().slice(0,10);
-const thisMonth= ()=>new Date().toISOString().slice(0,7);
+const thisMonth= ()=>{const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;};
 const uid      = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
 const fmtDate  = d=>{
   if(!d)return"Kein Datum";
@@ -437,7 +437,10 @@ function App(){
     if(bookedRef.current) return;
     bookedRef.current=true;
     const now=new Date();
-    const currentMonth=now.toISOString().slice(0,7);
+    // Lokale Zeitzone verwenden (nicht UTC) um Datumsvergleich korrekt zu machen
+    const year=now.getFullYear();
+    const mon=String(now.getMonth()+1).padStart(2,"0");
+    const currentMonth=`${year}-${mon}`;
     const today=now.getDate();
     const toBook=loadedSubs.filter(s=>s.active&&s.day_of_month<=today&&s.last_processed!==currentMonth);
     if(toBook.length===0) return;
@@ -524,7 +527,8 @@ function App(){
       const subName=entry.note.replace(" (Abo)","");
       const matchingSub=subs.find(s=>s.name===subName);
       if(matchingSub){
-        const currentMonth=new Date().toISOString().slice(0,7);
+        const _n=new Date();
+        const currentMonth=`${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,"0")}`;
         setSubs(prev=>prev.map(s=>s.id===matchingSub.id?{...s,last_processed:currentMonth}:s));
         sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',matchingSub.id);
       }
@@ -1065,7 +1069,18 @@ function App(){
                         {s.active?"● Aktiv":"○ Pausiert"}
                       </button>
                     </div>
-                    {s.last_processed&&<div style={{fontSize:10,color:C.muted,marginTop:8}}>✓ Zuletzt gebucht: {s.last_processed}</div>}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                      {s.last_processed
+                        ?<div style={{fontSize:10,color:C.muted}}>✓ Gebucht: {s.last_processed}</div>
+                        :<div style={{fontSize:10,color:C.muted}}>Noch nicht gebucht</div>}
+                      {s.last_processed&&<button onClick={()=>{
+                        setSubs(prev=>prev.map(x=>x.id===s.id?{...x,last_processed:""}:x));
+                        sb.from('subscriptions').update({last_processed:""}).eq('id',s.id);
+                        pop("🔄 Abo wird beim nächsten Laden neu gebucht");
+                      }} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,fontSize:10,padding:"2px 8px",borderRadius:6,cursor:"pointer"}}>
+                        Zurücksetzen
+                      </button>}
+                    </div>
                   </div>
                 ))}
               </div>
