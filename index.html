@@ -425,7 +425,14 @@ function App(){
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
       else setGoals(INIT_GOALS);
       if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
-      const loadedSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      // Duplikate aus DB entfernen (by name, erste Instanz behalten)
+      const rawSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      const seenNames=new Set();
+      const loadedSubs=rawSubs.filter(s=>{
+        const k=s.name.toLowerCase();
+        if(seenNames.has(k)) return false;
+        seenNames.add(k); return true;
+      });
       setSubs(loadedSubs);
       await autoBookSubs(userId,loadedSubs,loadedEntries);
     }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
@@ -445,12 +452,16 @@ function App(){
     const toBook=loadedSubs.filter(s=>s.active&&s.day_of_month<=today&&s.last_processed!==currentMonth);
     if(toBook.length===0) return;
 
-    // SCHRITT 1: last_processed ZUERST setzen (verhindert Doppelbuchung beim Neuladen)
-    const updateRes=await Promise.all(
-      toBook.map(s=>sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',s.id).eq('user_id',userId))
+    // SCHRITT 1: last_processed ZUERST setzen via upsert (zuverlaessiger als update)
+    const upsertRes=await Promise.all(
+      toBook.map(s=>sb.from('subscriptions').upsert({
+        id:s.id, user_id:userId, name:s.name, icon:s.icon,
+        amount:s.amount, category:s.category, day_of_month:s.day_of_month,
+        active:s.active, last_processed:currentMonth
+      },{onConflict:'id'}))
     );
-    const updateErr=updateRes.find(r=>r.error);
-    if(updateErr){ pop('❌ Abo-Sync Fehler: '+updateErr.error.message); return; }
+    const upsertErr=upsertRes.find(r=>r.error);
+    if(upsertErr){ pop('❌ Abo-Sync Fehler: '+upsertErr.error.message); bookedRef.current=false; return; }
 
     // State sofort aktualisieren
     setSubs(prev=>prev.map(s=>toBook.find(t=>t.id===s.id)?{...s,last_processed:currentMonth}:s));
@@ -544,7 +555,14 @@ function App(){
   const saveSub=()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!sForm.name||!sForm.amount)return;
+    // Duplikat-Schutz: Abo mit gleichem Namen schon vorhanden?
+    if(!editSubId&&subs.some(s=>s.name.toLowerCase()===sForm.name.toLowerCase())){
+      pop("⚠️ Abo mit diesem Namen existiert bereits");
+      return;
+    }
     const entry={name:sForm.name,icon:sForm.icon,amount:parseFloat(String(sForm.amount).replace(",",".")),category:sForm.category,day_of_month:Math.max(1,Math.min(31,parseInt(sForm.day_of_month)||1)),active:sForm.active};
+    // Modal sofort schließen (verhindert Doppel-Klick)
+    setShowSubDlg(false);
     if(editSubId){
       const upd={...entry,id:editSubId};
       setSubs(prev=>prev.map(s=>s.id===editSubId?upd:s));
@@ -553,10 +571,10 @@ function App(){
     } else {
       const ns={id:"sub"+uid(),...entry,last_processed:""};
       setSubs(prev=>[...prev,ns]);
-      sb.from('subscriptions').insert({id:ns.id,user_id:user.id,...entry,last_processed:""}).then(({error})=>{if(error){setSubs(prev=>prev.filter(s=>s.id!==ns.id));pop("❌ "+error.message);}});
+      sb.from('subscriptions').insert({id:ns.id,user_id:user.id,...entry,last_processed:""})
+        .then(({error})=>{if(error){setSubs(prev=>prev.filter(s=>s.id!==ns.id));pop("❌ "+error.message);}});
       pop("🔄 Abo hinzugefügt!");
     }
-    setShowSubDlg(false);
   };
   const delSub=id=>{
     setSubs(prev=>prev.filter(s=>s.id!==id));
