@@ -708,8 +708,17 @@ function App(){
     try{
       const bl=JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]");
       bl.push(id);
-      localStorage.setItem("hb_deleted_ids",JSON.stringify(bl.slice(-500))); // max 500
+      localStorage.setItem("hb_deleted_ids",JSON.stringify(bl.slice(-500)));
     }catch{}
+    // Sparplan-Buchung gelöscht: lastProcessed setzen damit nicht neu gebucht wird
+    if(id.startsWith("sparplan-")){
+      const parts=id.split("-");
+      const spId=parts[1];
+      const spMonth=parts.slice(2).join("-");
+      const updSp=sparpläne.map(s=>s.id===spId?{...s,lastProcessed:spMonth}:s);
+      setSparpläne(updSp);
+      try{localStorage.setItem("hb_spar",JSON.stringify(updSp));}catch{}
+    }
     setEntries(prev=>{
       const next=prev.filter(e=>e.id!==id);
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
@@ -834,11 +843,22 @@ function App(){
     const today=now.getDate();
     const toBook=currentSparpläne.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
     if(toBook.length===0)return;
+    // Blacklist laden - gelöschte Einträge nicht neu erstellen
+    let deletedBl=new Set();
+    try{deletedBl=new Set(JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]"));}catch{}
     let booked=0;
     for(const sp of toBook){
       const maxDay=new Date(year,now.getMonth()+1,0).getDate();
       const date=`${currentMonth}-${String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0")}`;
       const entryId=`sparplan-${sp.id}-${currentMonth}`;
+      // Nicht erstellen wenn in Blacklist (User hat es bewusst gelöscht)
+      if(deletedBl.has(entryId)){
+        // lastProcessed trotzdem setzen damit es nicht nächste Runde wieder versucht wird
+        currentSparpläne=currentSparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
+        setSparpläne(currentSparpläne);
+        try{localStorage.setItem("hb_spar",JSON.stringify(currentSparpläne));}catch{}
+        continue;
+      }
       const{error}=await sb.from('entries').upsert(
         {id:entryId,user_id:userId,type:"expense",category:"Sonstiges",amount:sp.amount,note:`${sp.name} Sparplan (Abo)`,date},
         {onConflict:'id',ignoreDuplicates:true}
@@ -2002,9 +2022,14 @@ function App(){
           if(!amt||amt<=0){pop("❌ Betrag eingeben");return;}
           if(!day||day<1||day>31){pop("❌ Tag 1–31 eingeben");return;}
           const entry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
+          // Wenn der Ausführungstag schon vorbei ist: diesen Monat überspringen
+          const now2=new Date();
+          const cm2=`${now2.getFullYear()}-${String(now2.getMonth()+1).padStart(2,"0")}`;
+          const skipThisMonth=day<=now2.getDate();
           const updated=editSpId
             ?sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s)
-            :[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:""}];
+            :[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:skipThisMonth?cm2:""}];
+          if(!editSpId&&skipThisMonth) pop("ℹ️ Startet nächsten Monat – Tag "+day+". ist in diesem Monat schon vergangen");
           setSparpläne(updated);
           try{localStorage.setItem("hb_spar",JSON.stringify(updated));}catch{}
           setShowSpDlg(false);
