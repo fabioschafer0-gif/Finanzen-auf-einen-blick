@@ -615,7 +615,8 @@ function App(){
       const rawSubs=sR.data?sR.data.filter(r=>!r.name.startsWith("SPARPLAN|")).map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
       // Sparplane aus Supabase laden
       const loadedSparplans=sR.data?sR.data.filter(r=>r.name.startsWith("SPARPLAN|")).map(r=>{const parts=r.name.split("|");return{id:r.id,depotId:parts[1]||"",name:parts[2]||"",ticker:r.icon||"",amount:Number(r.amount),dayOfMonth:Number(r.day_of_month),active:r.active,lastProcessed:r.last_processed||""};}):[]; 
-      if(loadedSparplans.length>0){setSparplans(loadedSparplans);try{localStorage.setItem("hb_spar",JSON.stringify(loadedSparplans));}catch{}}
+      setSparplans(loadedSparplans);
+      try{localStorage.setItem("hb_spar",JSON.stringify(loadedSparplans));}catch{}
       const seenNames=new Set();
       const loadedSubs=rawSubs.filter(s=>{
         const k=s.name.toLowerCase();
@@ -873,8 +874,17 @@ function App(){
   };
 
   const autoBookSparplane=async(userId)=>{
+    // Zuerst localStorage, dann als Fallback den übergebenen State
     let currentSp=[];
-    try{currentSp=JSON.parse(localStorage.getItem("hb_spar")||"[]");}catch{}
+    try{
+      const lsData=localStorage.getItem("hb_spar");
+      if(lsData) currentSp=JSON.parse(lsData);
+    }catch{}
+    // Fallback: Supabase-Daten aus dem Argument nutzen
+    if(currentSp.length===0&&sparplans&&sparplans.length>0){
+      currentSp=sparplans;
+      try{localStorage.setItem("hb_spar",JSON.stringify(currentSp));}catch{}
+    }
     if(currentSp.length===0)return;
     const now=new Date();
     const year=now.getFullYear();
@@ -1929,6 +1939,54 @@ function App(){
                         <button onClick={()=>sp?openEditSp(sp):openNewSp(d)} style={{background:C.border,border:"none",color:sp?C.blue:C.gold,fontSize:11,padding:"5px 10px",borderRadius:7,cursor:"pointer",fontWeight:700}}>
                           {sp?"✏️":"+ Sparplan"}
                         </button>
+                        {sp&&user&&<button onClick={async()=>{
+                          pop("⏳ Wird ausgeführt...");
+                          // Sparplan manuell ausführen
+                          const now=new Date();
+                          const year=now.getFullYear();
+                          const mon=String(now.getMonth()+1).padStart(2,"0");
+                          const currentMonth=year+"-"+mon;
+                          const maxDay=new Date(year,now.getMonth()+1,0).getDate();
+                          const date=currentMonth+"-"+String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0");
+                          const entryId="sparplan-"+sp.id+"-"+currentMonth;
+                          const{error}=await sb.from('entries').upsert(
+                            {id:entryId,user_id:user.id,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:date},
+                            {onConflict:'id',ignoreDuplicates:true}
+                          );
+                          if(error){pop("❌ Buchung fehlgeschlagen: "+error.message);return;}
+                          setEntries(function(prev){
+                            if(prev.some(function(e){return e.id===entryId;}))return prev;
+                            var next=prev.concat([{id:entryId,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:date}]);
+                            try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
+                            return next;
+                          });
+                          // Preis holen und Depot aktualisieren
+                          try{
+                            const r=await fetch('/api/price?ticker='+encodeURIComponent(sp.ticker));
+                            if(r.ok){
+                              const j=await r.json();
+                              const price=j?.chart?.result?.[0]?.meta?.regularMarketPrice||j?.chart?.result?.[0]?.meta?.previousClose||0;
+                              if(price>0){
+                                const addUnits=Math.round((sp.amount/price)*10000)/10000;
+                                setDepot(function(prev){
+                                  return prev.map(function(de){
+                                    if(de.id!==sp.depotId)return de;
+                                    const newUnits=Math.round((de.units+addUnits)*10000)/10000;
+                                    const newAvg=Math.round(((de.avgPrice*de.units+sp.amount)/newUnits)*100)/100;
+                                    sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',de.id);
+                                    return Object.assign({},de,{units:newUnits,avgPrice:newAvg});
+                                  });
+                                });
+                                pop("📈 +"+addUnits+" Anteile @ €"+price.toFixed(2)+" eingebucht!");
+                              } else {pop("⚠️ Kurs nicht verfügbar");}
+                            } else {pop("⚠️ API: "+r.status);}
+                          }catch(e){pop("❌ API-Fehler: "+e.message);}
+                          // lastProcessed setzen
+                          const updSp=sparplans.map(function(s){return s.id===sp.id?Object.assign({},s,{lastProcessed:currentMonth}):s;});
+                          setSparplans(updSp);
+                          try{localStorage.setItem("hb_spar",JSON.stringify(updSp));}catch{}
+                          sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',sp.id);
+                        }} style={{background:"#071a10",border:`1px solid ${C.green}`,color:C.green,fontSize:10,padding:"5px 8px",borderRadius:7,cursor:"pointer",fontWeight:700}}>▶</button>}
                         {sp&&<button onClick={()=>delSp(sp.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>}
                       </div>
                     </div>;
