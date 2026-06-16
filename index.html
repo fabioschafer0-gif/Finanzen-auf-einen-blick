@@ -43,9 +43,10 @@ const EMOJI={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bon
 
 const ETF_PRESETS=[
   {name:"iShares MSCI World",        ticker:"EUNL.DE"},
+  {name:"iShares MSCI ACWI",         ticker:"IUSQ.DE"},
+  {name:"iShares Core S&P 500",      ticker:"SXR8.DE"},
+  {name:"Vanguard FTSE All-World",   ticker:"VWCE.DE"},
   {name:"iShares Core MSCI EM IMI",  ticker:"IS3N.DE"},
-  {name:"Vanguard FTSE All-World",   ticker:"VWRL.MI"},
-  {name:"iShares S&P 500",           ticker:"SXR8.DE"},
   {name:"iShares DAX",               ticker:"EXS1.DE"},
   {name:"Xtrackers MSCI World Swap", ticker:"DBXW.DE"},
 ];
@@ -530,7 +531,24 @@ function App(){
 
       if(gR.data&&gR.data.length>0) setGoals(gR.data.map(r=>({id:r.id,name:r.name,icon:r.icon,color:r.color,target:Number(r.target),saved:Number(r.saved)})));
       else setGoals(INIT_GOALS);
-      if(dR.data) setDepot(dR.data.map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})));
+      // Depot: Blacklist + localStorage-Merge (wie entries)
+      let deletedDepotIds=new Set();
+      try{deletedDepotIds=new Set(JSON.parse(localStorage.getItem("hb_deleted_depot_ids")||"[]"));}catch{}
+      const sbDepot=dR.data?dR.data.filter(r=>!deletedDepotIds.has(r.id)).map(r=>({id:r.id,name:r.name,ticker:r.ticker,units:Number(r.units),avgPrice:Number(r.avg_price)})):[];
+      // Retry-delete für Einträge die noch in Supabase sind aber gelöscht sein sollten
+      const depotStillInSb=dR.data?dR.data.filter(r=>deletedDepotIds.has(r.id)):[];
+      if(depotStillInSb.length>0) await Promise.all(depotStillInSb.map(r=>sb.from('depot').delete().eq('id',r.id)));
+      // localStorage-Backup für fehlende Einträge
+      let localDepot=[];
+      try{localDepot=JSON.parse(localStorage.getItem("hb_depot_bak")||"[]");}catch{}
+      const sbDepotIds=new Set(sbDepot.map(e=>e.id));
+      const missingDepot=localDepot.filter(e=>!sbDepotIds.has(e.id)&&!deletedDepotIds.has(e.id));
+      if(missingDepot.length>0){
+        await sb.from('depot').insert(missingDepot.map(e=>({id:e.id,user_id:userId,name:e.name,ticker:e.ticker,units:e.units,avg_price:e.avgPrice})));
+      }
+      const allDepot=[...sbDepot,...missingDepot];
+      setDepot(allDepot);
+      try{localStorage.setItem("hb_depot_bak",JSON.stringify(allDepot));}catch{}
       // Duplikate aus DB entfernen (by name, erste Instanz behalten)
       const rawSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
       const seenNames=new Set();
@@ -764,29 +782,45 @@ function App(){
   // ── DEPOT ────────────────────────────────────────────────────
   const openNewDepot=()=>{setEditDepotId(null);setDForm({name:"",ticker:"",units:"",avgPrice:""});setShowDepotDlg(true);};
   const openEditDepot=etf=>{setEditDepotId(etf.id);setDForm({name:etf.name,ticker:etf.ticker,units:String(etf.units),avgPrice:String(etf.avgPrice)});setShowDepotDlg(true);};
-  const saveDepotEntry=()=>{
+  const saveDepotEntry=async()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)return;
-    setShowDepotDlg(false); // Sofort schließen – verhindert Doppel-Klick
+    setShowDepotDlg(false);
     const entry={name:dForm.name,ticker:dForm.ticker.toUpperCase().trim(),units:parseFloat(dForm.units),avgPrice:parseFloat(String(dForm.avgPrice).replace(",","."))};
     if(editDepotId){
       const upd={...entry,id:editDepotId};
-      setDepot(prev=>prev.map(e=>e.id===editDepotId?upd:e));
-      sb.from('depot').upsert({id:upd.id,user_id:user.id,name:upd.name,ticker:upd.ticker,units:upd.units,avg_price:upd.avgPrice});
-      pop("✅ Position aktualisiert");
+      setDepot(prev=>{
+        const next=prev.map(e=>e.id===editDepotId?upd:e);
+        try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
+        return next;
+      });
+      const{error}=await sb.from('depot').upsert({id:upd.id,user_id:user.id,name:upd.name,ticker:upd.ticker,units:upd.units,avg_price:upd.avgPrice}).select();
+      if(error) pop("❌ Supabase: "+error.message);
+      else pop("✅ Position aktualisiert");
     } else {
       const ni={id:"d"+uid(),...entry};
-      setDepot(prev=>[...prev,ni]);
-      sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice})
-        .then(({error})=>{if(error) pop("❌ "+error.message);});
-      pop("💹 ETF hinzugefügt!");
+      setDepot(prev=>{
+        const next=[...prev,ni];
+        try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
+        return next;
+      });
+      const{data:saved,error}=await sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice}).select();
+      if(error) pop("❌ Supabase: "+error.message);
+      else if(!saved||saved.length===0) pop("⚠️ Gespeichert aber nicht lesbar – RLS prüfen");
+      else pop("💹 ETF hinzugefügt!");
     }
     fetchPrice(entry.ticker);
   };
-  const delDepotEntry=id=>{
-    setDepot(prev=>prev.filter(e=>e.id!==id));
-    sb.from('depot').delete().eq('id',id);
+  const delDepotEntry=async(id)=>{
+    try{const bl=JSON.parse(localStorage.getItem("hb_deleted_depot_ids")||"[]");bl.push(id);localStorage.setItem("hb_deleted_depot_ids",JSON.stringify(bl.slice(-200)));}catch{}
+    setDepot(prev=>{
+      const next=prev.filter(e=>e.id!==id);
+      try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
+      return next;
+    });
     pop("🗑️ Position gelöscht");
+    const{error}=await sb.from('depot').delete().eq('id',id);
+    if(error) pop("⚠️ Lösch-Fehler: "+error.message);
   };
 
   const depotTotal  = depot.reduce((s,e)=>s+(priceData[e.ticker]??e.avgPrice)*e.units,0);
