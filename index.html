@@ -187,7 +187,7 @@ function Field({label,children}){
 }
 
 // ── DATE GROUPED LIST ───────────────────────────────────────────────────
-function DateGroupedList({entries,onDelete,isMobile}){
+function DateGroupedList({entries,onDelete,onDuplicate,isMobile}){
   const EMOJI_MAP={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
   const fmt=(n)=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtS=(n)=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
@@ -232,12 +232,14 @@ function DateGroupedList({entries,onDelete,isMobile}){
                     <div style={{fontSize:22,width:32,textAlign:"center"}}>{EMOJI_MAP[e.category]||"📝"}</div>
                     <div>
                       <div style={{fontWeight:700,fontSize:13,color:"#e2e8f0"}}>{e.category}</div>
-                      {e.note&&<div style={{fontSize:11,color:"#64748b",marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.note}</div>}
+                      {e.note&&<div style={{fontSize:11,color:"#64748b",marginTop:1,maxWidth:isMobile?150:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(e.note||"").replace(/#[\wäöüß]+/g,"").trim()}</div>}
+                      {(()=>{const tags=(e.note||"").match(/#[\wäöüß]+/g);return tags?<div style={{display:"flex",gap:4,marginTop:3,flexWrap:"wrap"}}>{tags.map(t=><span key={t} style={{fontSize:9,padding:"1px 6px",background:"#1e3a5f",color:"#60a5fa",borderRadius:10,fontWeight:600}}>{t}</span>)}</div>:null;})()}
                     </div>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?"#22c55e":"#f87171",whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmt(e.amount)}</span>
-                    <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
+                    <button onClick={()=>{if(onDuplicate)onDuplicate(e);}} title="Nochmal buchen" style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:12,padding:"2px 5px",opacity:0.6}}>📋</button>
+                        <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
                   </div>
                 </div>
               ))}
@@ -424,6 +426,9 @@ function App(){
 
   const [subs,        setSubs]        = useState([]);
   const [search,      setSearch]      = useState("");
+  const [tagFilter,   setTagFilter]   = useState("");
+  const [showQuickBook,setShowQuickBook]=useState(false);
+  const [quickCat,    setQuickCat]    = useState("");
   const [showKontoModal,setShowKontoModal]=useState(false);
   const [realBalance, setRealBalance]  = useState(()=>{try{return localStorage.getItem("hb_real_bal")||"";}catch{return "";}});
   const [baseBalance, setBaseBalance]  = useState(()=>{try{return localStorage.getItem("hb_base_bal")||"";}catch{return "";}});
@@ -873,6 +878,21 @@ function App(){
   const totalPct    = totalTarget>0?Math.min((totalSaved/totalTarget)*100,100):0;
   const gesamtVermoegen = totalSaved+depotTotal;
 
+  // Tags aus Notiz parsen (#hashtag)
+  const parseTags=note=>(note||"").match(/#[\w\u00e4\u00f6\u00fc\u00df]+/g)?.map(t=>t.slice(1))||[];
+  const allTags=[...new Set(entries.flatMap(e=>parseTags(e.note)))].slice(0,20);
+
+  // Top Kategorien (für Schnellbuchung)
+  const topCats=Object.entries(
+    mv.filter(e=>e.type==="expense").reduce((a,e)=>{a[e.category]=(a[e.category]||0)+1;return a;},{})
+  ).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([cat])=>cat);
+
+  // Budget-Warnungen
+  const budgetWarnings=catSorted.filter(([cat,amt])=>{
+    const b=budgets[cat]||0;
+    return b>0&&amt>=b*0.8;
+  });
+
   // Ausgaben-Trends: letzter Monat nach Kategorie
   const lastMonthStr=(()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;})();
   const lastMonthByCat=entries.filter(e=>e.date?.startsWith(lastMonthStr)&&e.type==="expense")
@@ -1156,6 +1176,41 @@ function App(){
               <div style={{fontSize:12,color:C.muted}}>Vergleiche deinen echten Kontostand mit deinen Buchungen</div>
             </div>}
 
+            {/* Budget-Warnungen */}
+            {budgetWarnings.length>0&&<div style={{background:"#1a0808",border:"1px solid #4a1a1a",borderRadius:14,padding:isMobile?12:16,marginBottom:isMobile?14:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.red,marginBottom:8}}>⚠️ Budget-Warnung</div>
+              {budgetWarnings.map(([cat,amt])=>{
+                const b=budgets[cat]||0;
+                const pct=Math.round((amt/b)*100);
+                return<div key={cat} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:`1px solid #2a1010`}}>
+                  <span style={{fontSize:12,color:C.text}}>{EMOJI[cat]||"📝"} {cat}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:pct>=100?C.red:"#f59e0b"}}>{pct}% – €{fmtShort(amt)} von €{fmtShort(b)}</span>
+                </div>;
+              })}
+            </div>}
+
+            {/* Monatsabschluss */}
+            {mv.length>0&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:isMobile?14:20,marginBottom:isMobile?14:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.mutedLight,marginBottom:12}}>📊 Monatsabschluss {fmtMonth(month)}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}>
+                  <div style={{fontSize:9,color:C.muted,marginBottom:3}}>SPARQUOTE</div>
+                  <div style={{fontSize:20,fontWeight:900,color:sparPct>=20?C.green:sparPct>=0?C.mutedLight:C.red}}>{sparPct!==null?sparPct.toFixed(0):"—"}%</div>
+                  {(()=>{const lm=new Date();lm.setDate(1);lm.setMonth(lm.getMonth()-1);const lms=`${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,"0")}`;const lmv=entries.filter(e=>e.date?.startsWith(lms));const li=lmv.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);const le=lmv.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);const lsp=li>0?((li-le)/li)*100:null;if(lsp===null||sparPct===null)return null;const diff=sparPct-lsp;return<div style={{fontSize:10,color:diff>=0?C.green:C.red,marginTop:3}}>{diff>=0?"↗":"↘"} {Math.abs(diff).toFixed(0)}% vs. Vormonat</div>;})()}
+                </div>
+                <div style={{background:C.bg,borderRadius:10,padding:"10px 12px"}}>
+                  <div style={{fontSize:9,color:C.muted,marginBottom:3}}>GRÖÞSTE AUSGABE</div>
+                  {catSorted.length>0?<>
+                    <div style={{fontSize:13,fontWeight:700}}>{EMOJI[catSorted[0][0]]||"📝"} {catSorted[0][0]}</div>
+                    <div style={{fontSize:11,color:C.red,marginTop:2}}>€{fmtShort(catSorted[0][1])}</div>
+                  </>:<div style={{fontSize:12,color:C.muted}}>—</div>}
+                </div>
+              </div>
+              <div style={{background:C.bg,borderRadius:10,padding:"10px 12px",fontSize:12,color:C.mutedLight,lineHeight:1.7}}>
+                {sparPct===null?"Noch keine Buchungen diesen Monat.":sparPct>=20?`💪 Stark! Du sparst ${sparPct.toFixed(0)}% deines Einkommens. Weiter so!`:sparPct>=0?`💡 Solide. ${sparPct.toFixed(0)}% gespart – noch Luft nach oben.`:"⚠️ Diese Monat mehr ausgegeben als eingenommen."}
+              </div>
+            </div>}
+
             {/* Notfallgroschen */}
             {avgMonthlyExp>0&&<div style={{background:C.card,border:`1px solid ${emergencyMonths>=6?"#22c55e33":emergencyMonths>=3?"#f59e0b33":"#f8717133"}`,borderRadius:14,padding:isMobile?14:20,marginBottom:isMobile?14:20}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
@@ -1213,6 +1268,16 @@ function App(){
                 <span>💾</span><div style={{textAlign:"left"}}><div style={{fontWeight:700,fontSize:12}}>Exportieren</div><div style={{fontSize:10,color:C.muted}}>CSV speichern</div></div>
               </button>
             </div>}
+            {/* Schnellbuchung */}
+            {topCats.length>0&&<div style={{marginBottom:14}}>
+              <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8}}>⚡ Schnellbuchung</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {topCats.map(cat=><button key={cat} onClick={()=>{setQuickCat(cat);setShowQuickBook(true);}} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,cursor:"pointer",fontSize:13,fontWeight:600}}>
+                  <span>{EMOJI[cat]||"📝"}</span>{cat}
+                </button>)}
+              </div>
+            </div>}
+
             {/* Suche */}
             <div style={{position:"relative",marginBottom:14}}>
               <input
@@ -1222,18 +1287,24 @@ function App(){
               />
               {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16}}>×</button>}
             </div>
+            {/* Tag-Filter */}
+            {allTags.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+              {allTags.map(tag=><button key={tag} onClick={()=>setTagFilter(tagFilter===tag?"":tag)} style={{padding:"3px 10px",background:tagFilter===tag?`${C.blue}33`:C.bg,border:`1px solid ${tagFilter===tag?C.blue:C.border}`,borderRadius:20,color:tagFilter===tag?C.blue:C.muted,fontSize:11,cursor:"pointer",fontWeight:tagFilter===tag?700:400}}>#{tag}</button>)}
+            </div>}
+
             {(()=>{
-              const filtered=search?sortedMv.filter(e=>
-                (e.note||"").toLowerCase().includes(search.toLowerCase())||
-                (e.category||"").toLowerCase().includes(search.toLowerCase())
-              ):sortedMv;
+              const filtered=(search||tagFilter)?sortedMv.filter(e=>{
+                const matchSearch=!search||(e.note||"").toLowerCase().includes(search.toLowerCase())||(e.category||"").toLowerCase().includes(search.toLowerCase());
+                const matchTag=!tagFilter||parseTags(e.note).includes(tagFilter);
+                return matchSearch&&matchTag;
+              }):sortedMv;
               return filtered.length===0
                 ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
                   <div style={{fontSize:52,marginBottom:14}}>{search?"🔍":"📭"}</div>
                   <div style={{fontWeight:600,fontSize:15}}>{search?"Keine Treffer für „"+search+"“":"Noch keine Buchungen"}</div>
                   {!search&&<div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>}
                 </div>
-                :<DateGroupedList entries={filtered} onDelete={delEntry} isMobile={isMobile}/>;
+                :<DateGroupedList entries={filtered} onDelete={delEntry} onDuplicate={e=>{setForm({type:e.type,category:e.category,amount:String(e.amount),note:e.note||"",date:todayStr()});setShowAdd(true);}} isMobile={isMobile}/>;
             })()}
           </>}
 
@@ -1665,7 +1736,10 @@ function App(){
           {(form.type==="income"?INCOME_CAT:EXPENSE_CAT).map(c=><option key={c} value={c}>{EMOJI[c]?`${EMOJI[c]} ${c}`:c}</option>)}
         </select>
       </Field>
-      <Field label="Notiz (optional)"><input type="text" placeholder="z.B. Rewe, Tankstelle…" value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} style={IS}/></Field>
+      <Field label="Notiz + Tags (optional)">
+        <input type="text" placeholder="z.B. Rewe #lebensmittel #wöchentlich" value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} style={IS}/>
+        <div style={{fontSize:10,color:C.muted,marginTop:4}}>Tipp: #hashtags für spätere Filterung</div>
+      </Field>
       <Field label="Datum"><input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={IS}/></Field>
       <button onClick={addEntry} disabled={!form.amount||!form.category} style={{width:"100%",padding:15,marginTop:14,background:(!form.amount||!form.category)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!form.amount||!form.category)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!form.amount||!form.category)?C.muted:"#080e1a"}}>✓ Speichern</button>
     </Overlay>}
@@ -1776,6 +1850,31 @@ function App(){
         {budgets[budgetCat]&&<button onClick={()=>{const nb={...budgets};delete nb[budgetCat];setBudgets(nb);localStorage.setItem("hb_budgets",JSON.stringify(nb));setShowBudgetDlg(false);pop("🗑️ Budget entfernt");}} style={{flex:1,padding:14,background:C.border,border:"none",borderRadius:12,color:C.muted,cursor:"pointer",fontWeight:600}}>Entfernen</button>}
         <button onClick={()=>saveBudgetFn(budgetCat,budgetVal)} disabled={!budgetVal} style={{flex:2,padding:14,background:!budgetVal?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:!budgetVal?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:!budgetVal?C.muted:"#080e1a"}}>✓ Speichern</button>
       </div>
+    </Overlay>}
+
+    {/* SCHNELLBUCHUNG MODAL */}
+    {showQuickBook&&<Overlay title={`⚡ ${EMOJI[quickCat]||"📝"} ${quickCat}`} onClose={()=>setShowQuickBook(false)}>
+      <div style={{fontSize:13,color:C.muted,marginBottom:16}}>Betrag eingeben — Kategorie ist bereits vorausgewählt.</div>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Betrag (€)</div>
+      <input type="number" inputMode="decimal" placeholder="0.00" autoFocus
+        id="qb-amount"
+        style={{width:"100%",padding:"16px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:20,outline:"none",boxSizing:"border-box",marginBottom:14}}/>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Notiz (optional)</div>
+      <input type="text" placeholder="z.B. Rewe #wöchentlich" id="qb-note"
+        style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box",marginBottom:14}}/>
+      <button onClick={async()=>{
+        const amt=parseFloat(document.getElementById("qb-amount").value);
+        const note=document.getElementById("qb-note").value;
+        if(!amt||amt<=0)return;
+        const e={type:"expense",category:quickCat,amount:amt,note,date:todayStr(),id:uid()};
+        setEntries(prev=>{const next=[...prev,e];try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}return next;});
+        setShowQuickBook(false);
+        const{error}=await sb.from('entries').insert({...e,user_id:user.id}).select();
+        if(error) pop("❌ "+error.message);
+        else pop("✅ "+quickCat+" – €"+amt.toFixed(2)+" gespeichert");
+      }} style={{width:"100%",padding:15,background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:"#080e1a"}}>
+        ⚡ Jetzt buchen
+      </button>
     </Overlay>}
 
     {/* ABO MODAL */}
