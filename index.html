@@ -440,7 +440,7 @@ function App(){
   const [kontoRefDate,setKontoRefDate]= useState(()=>{try{return localStorage.getItem("hb_konto_ref_date")||"";}catch{return "";}});
   const [budgets,     setBudgets]     = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_budgets")||"{}");}catch{return {};}});
   const [showBudgetDlg,setShowBudgetDlg]=useState(false);
-  const [sparpläne,    setSparpläne]    = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_sparpläne")||"[]");}catch{return [];}});
+  const [sparplans,    setSparplans]    = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_sparplans")||"[]");}catch{return [];}});
   const [showSpDlg,    setShowSpDlg]    = useState(false);
   const [editSpId,     setEditSpId]     = useState(null);
   const [spForm,       setSpForm]       = useState({name:"",ticker:"",depotId:"",amount:"",dayOfMonth:"1",active:true});
@@ -584,7 +584,7 @@ function App(){
       });
       setSubs(loadedSubs);
       await autoBookSubs(userId,loadedSubs,loadedEntries);
-      await autoBookSparpläne(userId);
+      await autoBookSparplane(userId);
     }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
     setLoading(false);
     loadingRef.current=false;
@@ -715,8 +715,8 @@ function App(){
       const parts=id.split("-");
       const spId=parts[1];
       const spMonth=parts.slice(2).join("-");
-      const updSp=sparpläne.map(s=>s.id===spId?{...s,lastProcessed:spMonth}:s);
-      setSparpläne(updSp);
+      const updSp=sparplans.map(s=>s.id===spId?{...s,lastProcessed:spMonth}:s);
+      setSparplans(updSp);
       try{localStorage.setItem("hb_spar",JSON.stringify(updSp));}catch{}
     }
     setEntries(prev=>{
@@ -806,13 +806,13 @@ function App(){
     try{
       let updated;
       if(editSpId){
-        updated=sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s);
+        updated=sparplans.map(s=>s.id===editSpId?{...s,...entry}:s);
         pop("✅ Sparplan aktualisiert");
       } else {
-        updated=[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:""}];
+        updated=[...sparplans,{...entry,id:"sp"+uid(),lastProcessed:""}];
         pop("📅 Sparplan eingerichtet!");
       }
-      setSparpläne(updated);
+      setSparplans(updated);
       localStorage.setItem("hb_spar",JSON.stringify(updated));
       setShowSpDlg(false);
     } catch(e){
@@ -820,28 +820,28 @@ function App(){
     }
   };
   const delSp=id=>{
-    const updated=sparpläne.filter(s=>s.id!==id);
-    setSparpläne(updated);
+    const updated=sparplans.filter(s=>s.id!==id);
+    setSparplans(updated);
     localStorage.setItem("hb_spar",JSON.stringify(updated));
     pop("🗑️ Sparplan gelöscht");
   };
   const toggleSp=id=>{
-    const updated=sparpläne.map(s=>s.id===id?{...s,active:!s.active}:s);
-    setSparpläne(updated);
+    const updated=sparplans.map(s=>s.id===id?{...s,active:!s.active}:s);
+    setSparplans(updated);
     localStorage.setItem("hb_spar",JSON.stringify(updated));
   };
 
-  const autoBookSparpläne=async(userId)=>{
+  const autoBookSparplane=async(userId)=>{
     // localStorage direkt lesen (vermeidet stale-closure Problem)
-    let currentSparpläne=[];
-    try{currentSparpläne=JSON.parse(localStorage.getItem("hb_spar")||"[]");}catch{}
-    if(currentSparpläne.length===0)return;
+    let currentSparplane=[];
+    try{currentSparplane=JSON.parse(localStorage.getItem("hb_spar")||"[]");}catch{}
+    if(currentSparplane.length===0)return;
     const now=new Date();
     const year=now.getFullYear();
     const mon=String(now.getMonth()+1).padStart(2,"0");
     const currentMonth=`${year}-${mon}`;
     const today=now.getDate();
-    const toBook=currentSparpläne.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
+    const toBook=currentSparplane.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
     if(toBook.length===0)return;
     // Blacklist laden - gelöschte Einträge nicht neu erstellen
     let deletedBl=new Set();
@@ -854,9 +854,9 @@ function App(){
       // Nicht erstellen wenn in Blacklist (User hat es bewusst gelöscht)
       if(deletedBl.has(entryId)){
         // lastProcessed trotzdem setzen damit es nicht nächste Runde wieder versucht wird
-        currentSparpläne=currentSparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
-        setSparpläne(currentSparpläne);
-        try{localStorage.setItem("hb_spar",JSON.stringify(currentSparpläne));}catch{}
+        currentSparplane=currentSparplane.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
+        setSparplans(currentSparplane);
+        try{localStorage.setItem("hb_spar",JSON.stringify(currentSparplane));}catch{}
         continue;
       }
       const{error}=await sb.from('entries').upsert(
@@ -875,9 +875,9 @@ function App(){
           sb.from('depot').update({units:Math.round(newUnits*10000)/10000,avg_price:Math.round(newAvg*100)/100}).eq('id',d.id);
           return{...d,units:Math.round(newUnits*10000)/10000,avgPrice:Math.round(newAvg*100)/100};
         }));
-        currentSparpläne=currentSparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
-        setSparpläne(currentSparpläne);
-        localStorage.setItem("hb_spar",JSON.stringify(currentSparpläne));
+        currentSparplane=currentSparplane.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
+        setSparplans(currentSparplane);
+        localStorage.setItem("hb_spar",JSON.stringify(currentSparplane));
         booked++;
       }
     }
@@ -1763,7 +1763,7 @@ function App(){
               ?<div style={{textAlign:"center",padding:"60px 20px",color:C.muted}}>
                 <div style={{fontSize:56,marginBottom:16}}>💹</div>
                 <div style={{fontWeight:700,fontSize:16,marginBottom:8,color:C.text}}>Noch keine ETFs eingetragen</div>
-                <div style={{fontSize:13,marginBottom:6,lineHeight:1.8}}>Füge deine Trade Republic Sparpläne einmalig hinzu.</div>
+                <div style={{fontSize:13,marginBottom:6,lineHeight:1.8}}>Füge deine Trade Republic Sparplane einmalig hinzu.</div>
                 <div style={{fontSize:12,marginBottom:24,color:C.muted}}>Wir holen die Live-Kurse automatisch von Yahoo Finance.</div>
                 <button onClick={openNewDepot} style={{background:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",color:"#fff",fontSize:14,padding:"13px 26px",borderRadius:11,cursor:"pointer",fontWeight:700}}>+ Erste ETF-Position hinzufügen</button>
               </div>
@@ -1832,14 +1832,14 @@ function App(){
             {/* ── SPARPLÄNE ── */}
             <div style={{marginTop:24,borderTop:`1px solid ${C.border}`,paddingTop:20}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-                <div style={{fontSize:14,fontWeight:800,color:C.text}}>📅 Sparpläne</div>
+                <div style={{fontSize:14,fontWeight:800,color:C.text}}>📅 Sparplane</div>
                 <div style={{fontSize:11,color:C.muted}}>Automatisch monatlich ausgeführt</div>
               </div>
               {depot.length===0
                 ?<div style={{fontSize:13,color:C.muted,textAlign:"center",padding:"20px 0"}}>Erst ETF-Positionen anlegen</div>
                 :<div>
                   {depot.map(d=>{
-                    const sp=sparpläne.find(s=>s.depotId===d.id);
+                    const sp=sparplans.find(s=>s.depotId===d.id);
                     return<div key={d.id} style={{background:C.card,border:`1px solid ${sp?.active?C.blue+"44":C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div>
                         <div style={{fontWeight:700,fontSize:13}}>{d.name}</div>
@@ -1997,48 +1997,47 @@ function App(){
     </Overlay>}
 
     {/* SPARPLAN MODAL */}
-    {showSpDlg&&<Overlay title={"📅 Sparplan: "+spForm.name} onClose={()=>setShowSpDlg(false)}>
+    {showSpDlg&&<Overlay title={"Sparplan: "+spForm.name} onClose={()=>setShowSpDlg(false)}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
         <div>
-          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Monatlicher Betrag (€)</div>
-          <input autoFocus type="number" inputMode="decimal" placeholder="z.B. 100"
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Betrag pro Monat (€)</div>
+          <input type="number" inputMode="decimal" placeholder="z.B. 100"
             value={spForm.amount} onChange={e=>setSpForm(f=>({...f,amount:e.target.value}))}
             style={{width:"100%",padding:"13px 14px",background:C.bg,border:`2px solid ${C.blue}`,borderRadius:10,color:C.text,fontSize:16,outline:"none",boxSizing:"border-box",fontWeight:700}}/>
         </div>
         <div>
-          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Ausführungstag</div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Ausführungstag (1-31)</div>
           <input type="number" min="1" max="31" placeholder="1"
             value={spForm.dayOfMonth} onChange={e=>setSpForm(f=>({...f,dayOfMonth:e.target.value}))}
             style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:16,outline:"none",boxSizing:"border-box"}}/>
         </div>
       </div>
-      <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.mutedLight}}>
-        📅 Am <strong style={{color:C.gold}}>{spForm.dayOfMonth||1}. jeden Monat</strong>: <strong style={{color:C.text}}>€{spForm.amount||"?"}</strong> Ausgabe + Einheiten werden berechnet
+      <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.mutedLight}}>
+        Am <strong style={{color:C.gold}}>{spForm.dayOfMonth||1}. jeden Monat</strong>: <strong style={{color:C.text}}>€{spForm.amount||"?"}</strong> wird automatisch gebucht
       </div>
-      <button
-        onClick={()=>{
-          const amt=parseFloat(String(spForm.amount||"").replace(",","."));
-          const day=parseInt(spForm.dayOfMonth)||0;
-          if(!amt||amt<=0){pop("❌ Betrag eingeben");return;}
-          if(!day||day<1||day>31){pop("❌ Tag 1–31 eingeben");return;}
-          const entry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
-          // Wenn der Ausführungstag schon vorbei ist: diesen Monat überspringen
-          // entry hier definieren (fehlte vorher!)
-          const entry2={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
-          const now2=new Date();
-          const cm2=`${now2.getFullYear()}-${String(now2.getMonth()+1).padStart(2,"0")}`;
-          const skipThisMonth=day<=now2.getDate();
-          const updated=editSpId
-            ?sparpläne.map(s=>s.id===editSpId?{...s,...entry2}:s)
-            :[...sparpläne,{...entry2,id:"sp"+uid(),lastProcessed:skipThisMonth?cm2:""}];
-          if(!editSpId&&skipThisMonth) pop("ℹ️ Startet nächsten Monat – Tag "+day+". ist in diesem Monat schon vergangen");
-          setSparpläne(updated);
-          try{localStorage.setItem("hb_spar",JSON.stringify(updated));}catch{}
+      <button style={{width:"100%",padding:16,background:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:16,color:"#fff"}}
+        onClick={function(){
+          var amt=parseFloat((spForm.amount||"").replace(",","."));
+          var day=parseInt(spForm.dayOfMonth);
+          if(!amt||amt<=0||isNaN(amt)){pop("❌ Bitte Betrag eingeben");return;}
+          if(!day||day<1||day>31||isNaN(day)){pop("❌ Tag zwischen 1 und 31 eingeben");return;}
+          var now=new Date();
+          var cm=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+          var newEntry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
+          var skip=day<=now.getDate();
+          var list;
+          if(editSpId){
+            list=sparplans.map(function(s){return s.id===editSpId?Object.assign({},s,newEntry):s;});
+          } else {
+            list=sparplans.concat([Object.assign({},newEntry,{id:"sp"+uid(),lastProcessed:skip?cm:""})]);
+          }
+          setSparplans(list);
+          try{localStorage.setItem("hb_spar",JSON.stringify(list));}catch(e){}
           setShowSpDlg(false);
-          pop(editSpId?"✅ Sparplan aktualisiert":"📅 Sparplan eingerichtet!");
-        }}
-        style={{width:"100%",padding:16,background:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:16,color:"#fff",marginTop:4}}>
-        ✓ {editSpId?"Speichern":"Sparplan einrichten"}
+          pop(editSpId?"✅ Gespeichert":"📅 Sparplan eingerichtet!");
+          if(!editSpId&&skip)setTimeout(function(){pop("ℹ️ Startet nächsten Monat");},1000);
+        }}>
+        {editSpId?"Speichern":"Einrichten"}
       </button>
     </Overlay>}
 
