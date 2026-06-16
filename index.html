@@ -440,6 +440,10 @@ function App(){
   const [kontoRefDate,setKontoRefDate]= useState(()=>{try{return localStorage.getItem("hb_konto_ref_date")||"";}catch{return "";}});
   const [budgets,     setBudgets]     = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_budgets")||"{}");}catch{return {};}});
   const [showBudgetDlg,setShowBudgetDlg]=useState(false);
+  const [sparpläne,    setSparpläne]    = useState(()=>{try{return JSON.parse(localStorage.getItem("hb_sparpläne")||"[]");}catch{return [];}});
+  const [showSpDlg,    setShowSpDlg]    = useState(false);
+  const [editSpId,     setEditSpId]     = useState(null);
+  const [spForm,       setSpForm]       = useState({name:"",ticker:"",depotId:"",amount:"",dayOfMonth:"1",active:true});
   const [budgetCat,   setBudgetCat]   = useState("");
   const [budgetVal,   setBudgetVal]   = useState("");
   const [showSubDlg,  setShowSubDlg]  = useState(false);
@@ -580,6 +584,7 @@ function App(){
       });
       setSubs(loadedSubs);
       await autoBookSubs(userId,loadedSubs,loadedEntries);
+      await autoBookSparpläne(userId);
     }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
     setLoading(false);
     loadingRef.current=false;
@@ -762,6 +767,77 @@ function App(){
       sb.from('subscriptions').update({active:na}).eq('id',id);
       return{...s,active:na};
     }));
+  };
+
+  // ── SPARPLÄNE
+  const openNewSp=(depot_entry)=>{
+    setEditSpId(null);
+    setSpForm({name:depot_entry.name,ticker:depot_entry.ticker,depotId:depot_entry.id,amount:"",dayOfMonth:"1",active:true});
+    setShowSpDlg(true);
+  };
+  const openEditSp=sp=>{
+    setEditSpId(sp.id);
+    setSpForm({name:sp.name,ticker:sp.ticker,depotId:sp.depotId,amount:String(sp.amount),dayOfMonth:String(sp.dayOfMonth),active:sp.active});
+    setShowSpDlg(true);
+  };
+  const saveSp=()=>{
+    if(!spForm.amount||!spForm.dayOfMonth)return;
+    const entry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:parseFloat(String(spForm.amount).replace(",",".")),dayOfMonth:Math.max(1,Math.min(31,parseInt(spForm.dayOfMonth)||1)),active:spForm.active};
+    let updated;
+    if(editSpId){ updated=sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s); pop("✅ Sparplan aktualisiert"); }
+    else { updated=[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:""}]; pop("📅 Sparplan eingerichtet!"); }
+    setSparpläne(updated);
+    localStorage.setItem("hb_spar",JSON.stringify(updated));
+    setShowSpDlg(false);
+  };
+  const delSp=id=>{
+    const updated=sparpläne.filter(s=>s.id!==id);
+    setSparpläne(updated);
+    localStorage.setItem("hb_spar",JSON.stringify(updated));
+    pop("🗑️ Sparplan gelöscht");
+  };
+  const toggleSp=id=>{
+    const updated=sparpläne.map(s=>s.id===id?{...s,active:!s.active}:s);
+    setSparpläne(updated);
+    localStorage.setItem("hb_spar",JSON.stringify(updated));
+  };
+
+  const autoBookSparpläne=async(userId)=>{
+    const now=new Date();
+    const year=now.getFullYear();
+    const mon=String(now.getMonth()+1).padStart(2,"0");
+    const currentMonth=`${year}-${mon}`;
+    const today=now.getDate();
+    const toBook=sparpläne.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
+    if(toBook.length===0)return;
+    let booked=0;
+    for(const sp of toBook){
+      const maxDay=new Date(year,now.getMonth()+1,0).getDate();
+      const date=`${currentMonth}-${String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0")}`;
+      const entryId=`sparplan-${sp.id}-${currentMonth}`;
+      const{error}=await sb.from('entries').upsert(
+        {id:entryId,user_id:userId,type:"expense",category:"Sonstiges",amount:sp.amount,note:`${sp.name} Sparplan (Abo)`,date},
+        {onConflict:'id',ignoreDuplicates:true}
+      );
+      if(!error){
+        setEntries(prev=>prev.some(e=>e.id===entryId)?prev:[...prev,{id:entryId,type:"expense",category:"Sonstiges",amount:sp.amount,note:`${sp.name} Sparplan (Abo)`,date}]);
+        // Einheiten berechnen wenn Kurs bekannt
+        setDepot(prev=>prev.map(d=>{
+          if(d.id!==sp.depotId)return d;
+          const price=priceData[sp.ticker];
+          if(!price)return d;
+          const newUnits=d.units+(sp.amount/price);
+          const newAvg=(d.avgPrice*d.units+sp.amount)/newUnits;
+          sb.from('depot').update({units:Math.round(newUnits*10000)/10000,avg_price:Math.round(newAvg*100)/100}).eq('id',d.id);
+          return{...d,units:Math.round(newUnits*10000)/10000,avgPrice:Math.round(newAvg*100)/100};
+        }));
+        const updated=sparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
+        setSparpläne(updated);
+        localStorage.setItem("hb_spar",JSON.stringify(updated));
+        booked++;
+      }
+    }
+    if(booked>0) setTimeout(()=>pop(`📅 ${booked} Sparplan-Ausführung${booked>1?"en":""} gebucht!`),800);
   };
 
   // ── ZIELE ────────────────────────────────────────────────────
@@ -1708,6 +1784,41 @@ function App(){
             {depot.length>0&&<div style={{marginTop:20,background:"#090f1e",border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",fontSize:11,color:C.muted,lineHeight:1.8}}>
               ℹ️ Kursdaten via Yahoo Finance (15–20 Min. verzögert) · Trade Republic bietet keine öffentliche API – du trägst Positionen einmalig ein, Kurse werden automatisch abgerufen.
             </div>}
+
+            {/* ── SPARPLÄNE ── */}
+            <div style={{marginTop:24,borderTop:`1px solid ${C.border}`,paddingTop:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontSize:14,fontWeight:800,color:C.text}}>📅 Sparpläne</div>
+                <div style={{fontSize:11,color:C.muted}}>Automatisch monatlich ausgeführt</div>
+              </div>
+              {depot.length===0
+                ?<div style={{fontSize:13,color:C.muted,textAlign:"center",padding:"20px 0"}}>Erst ETF-Positionen anlegen</div>
+                :<div>
+                  {depot.map(d=>{
+                    const sp=sparpläne.find(s=>s.depotId===d.id);
+                    return<div key={d.id} style={{background:C.card,border:`1px solid ${sp?.active?C.blue+"44":C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:13}}>{d.name}</div>
+                        <div style={{fontSize:11,color:C.muted,marginTop:2}}>{d.ticker}</div>
+                        {sp&&<div style={{fontSize:11,color:sp.active?C.blue:C.muted,marginTop:4,fontWeight:600}}>
+                          {sp.active?"●":"○"} €{fmtAmt(sp.amount)} am {sp.dayOfMonth}. jeden Monat
+                          {sp.lastProcessed&&<span style={{marginLeft:6,opacity:0.6}}>✓ {sp.lastProcessed}</span>}
+                        </div>}
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        {sp&&<button onClick={()=>toggleSp(sp.id)} style={{background:sp.active?"#071a10":"#1a0d0d",border:`1px solid ${sp.active?"#1a4020":"#4a1a1a"}`,color:sp.active?"#4ade80":"#f87171",fontSize:10,padding:"4px 10px",borderRadius:7,cursor:"pointer",fontWeight:700}}>
+                          {sp.active?"Aktiv":"Pausiert"}
+                        </button>}
+                        <button onClick={()=>sp?openEditSp(sp):openNewSp(d)} style={{background:C.border,border:"none",color:sp?C.blue:C.gold,fontSize:11,padding:"5px 10px",borderRadius:7,cursor:"pointer",fontWeight:700}}>
+                          {sp?"✏️":"+ Sparplan"}
+                        </button>
+                        {sp&&<button onClick={()=>delSp(sp.id)} style={{background:C.border,border:"none",color:C.red,fontSize:11,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>✕</button>}
+                      </div>
+                    </div>;
+                  })}
+                </div>
+              }
+            </div>
           </>}
 
         </div>
@@ -1828,6 +1939,45 @@ function App(){
       </Field>
       <button onClick={saveDepotEntry} disabled={!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice} style={{width:"100%",padding:15,marginTop:14,background:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)?C.muted:"#fff"}}>
         {editDepotId?"✓ Speichern":"✓ Hinzufügen & Kurs laden"}
+      </button>
+    </Overlay>}
+
+    {/* SPARPLAN MODAL */}
+    {showSpDlg&&<Overlay title={editSpId?"Sparplan bearbeiten":"📅 Sparplan für "+spForm.name} onClose={()=>setShowSpDlg(false)}>
+      <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.7}}>
+        Der Sparplan bucht jeden Monat automatisch die Ausgabe und berechnet die neuen Einheiten anhand des aktuellen Kurses.
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>ETF</div>
+        <div style={{padding:"12px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,fontSize:14,fontWeight:700,color:C.blue}}>{spForm.ticker} – {spForm.name}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Monatlicher Betrag (€)</div>
+          <input type="number" inputMode="decimal" placeholder="100" value={spForm.amount}
+            onChange={e=>setSpForm(f=>({...f,amount:e.target.value}))}
+            style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:5}}>Ausführungstag</div>
+          <input type="number" min="1" max="31" placeholder="1" value={spForm.dayOfMonth}
+            onChange={e=>setSpForm(f=>({...f,dayOfMonth:e.target.value}))}
+            style={{width:"100%",padding:"13px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+      <div style={{background:C.bg,borderRadius:10,padding:"12px 14px",marginBottom:14,fontSize:12,color:C.mutedLight,lineHeight:1.7}}>
+        📅 Am <strong style={{color:C.gold}}>{spForm.dayOfMonth||1}. jeden Monat</strong> werden <strong style={{color:C.text}}>€{spForm.amount||"?"}</strong> als Ausgabe gebucht.<br/>
+        {priceData[spForm.ticker]?<span>ℹ️ Kurs bekannt (€{fmtAmt(priceData[spForm.ticker])}) – Einheiten werden automatisch berechnet.</span>:<span>⚠️ Kurs noch nicht geladen – nur Ausgabe wird gebucht.</span>}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"12px 14px",background:C.bg,borderRadius:10}}>
+        <span style={{fontSize:13,color:C.text,flex:1}}>Sparplan aktiv</span>
+        <button onClick={()=>setSpForm(f=>({...f,active:!f.active}))} style={{background:spForm.active?"#071a10":"#1a0d0d",border:`1px solid ${spForm.active?"#1a4020":"#4a1a1a"}`,color:spForm.active?"#4ade80":"#f87171",fontSize:12,padding:"6px 16px",borderRadius:8,cursor:"pointer",fontWeight:700}}>
+          {spForm.active?"● Aktiv":"○ Pausiert"}
+        </button>
+      </div>
+      <button onClick={saveSp} disabled={!spForm.amount||!spForm.dayOfMonth}
+        style={{width:"100%",padding:15,background:(!spForm.amount||!spForm.dayOfMonth)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:(!spForm.amount||!spForm.dayOfMonth)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!spForm.amount||!spForm.dayOfMonth)?C.muted:"#fff"}}>
+        ✓ {editSpId?"Sparplan speichern":"Sparplan einrichten"}
       </button>
     </Overlay>}
 
