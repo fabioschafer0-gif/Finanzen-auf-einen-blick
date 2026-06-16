@@ -453,6 +453,30 @@ function App(){
   const [authLoading, setAuthLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
+  // Pending Sparplan-Depot-Updates nach Kurs-Laden anwenden
+  React.useEffect(()=>{
+    if(!user||Object.keys(priceData).length===0)return;
+    try{
+      const pending=JSON.parse(localStorage.getItem("hb_sp_pending")||"[]");
+      if(pending.length===0)return;
+      const remaining=[];
+      pending.forEach(function(p){
+        const price=priceData[p.ticker];
+        if(!price){remaining.push(p);return;}
+        setDepot(function(prev){return prev.map(function(d){
+          if(d.id!==p.depotId)return d;
+          const newUnits=Math.round((d.units+(p.amount/price))*10000)/10000;
+          const newAvg=Math.round(((d.avgPrice*d.units+p.amount)/newUnits)*100)/100;
+          sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',d.id)
+            .then(function(){try{localStorage.setItem("hb_depot_bak",JSON.stringify(prev.map(function(x){return x.id===d.id?{...x,units:newUnits,avgPrice:newAvg}:x;})));}catch{}});
+          pop("📈 Depot aktualisiert: +"+newUnits.toFixed(4)+" "+p.ticker);
+          return{...d,units:newUnits,avgPrice:newAvg};
+        });});
+      });
+      localStorage.setItem("hb_sp_pending",JSON.stringify(remaining));
+    }catch(e){console.warn("Depot-Update Fehler:",e);}
+  },[priceData,user]);
+
   const isMobile = windowWidth < 768;
 
   useEffect(()=>{
@@ -575,7 +599,10 @@ function App(){
       setDepot(allDepot);
       try{localStorage.setItem("hb_depot_bak",JSON.stringify(allDepot));}catch{}
       // Duplikate aus DB entfernen (by name, erste Instanz behalten)
-      const rawSubs=sR.data?sR.data.map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      const rawSubs=sR.data?sR.data.filter(r=>!r.name.startsWith("SPARPLAN|")).map(r=>({id:r.id,name:r.name,icon:r.icon||"🔄",amount:Number(r.amount),category:r.category,day_of_month:Number(r.day_of_month),active:r.active,last_processed:r.last_processed||""})):[];
+      // Sparplane aus Supabase laden
+      const loadedSparplans=sR.data?sR.data.filter(r=>r.name.startsWith("SPARPLAN|")).map(r=>{const parts=r.name.split("|");return{id:r.id,depotId:parts[1]||"",name:parts[2]||"",ticker:r.icon||"",amount:Number(r.amount),dayOfMonth:Number(r.day_of_month),active:r.active,lastProcessed:r.last_processed||""};}):[]; 
+      if(loadedSparplans.length>0){setSparplans(loadedSparplans);try{localStorage.setItem("hb_spar",JSON.stringify(loadedSparplans));}catch{}}
       const seenNames=new Set();
       const loadedSubs=rawSubs.filter(s=>{
         const k=s.name.toLowerCase();
@@ -822,7 +849,8 @@ function App(){
   const delSp=id=>{
     const updated=sparplans.filter(s=>s.id!==id);
     setSparplans(updated);
-    localStorage.setItem("hb_spar",JSON.stringify(updated));
+    try{localStorage.setItem("hb_spar",JSON.stringify(updated));}catch{}
+    sb.from('subscriptions').delete().eq('id',id);
     pop("🗑️ Sparplan gelöscht");
   };
   const toggleSp=id=>{
@@ -865,16 +893,14 @@ function App(){
       );
       if(!error){
         setEntries(prev=>prev.some(e=>e.id===entryId)?prev:[...prev,{id:entryId,type:"expense",category:"Sonstiges",amount:sp.amount,note:`${sp.name} Sparplan (Abo)`,date}]);
-        // Einheiten berechnen wenn Kurs bekannt
-        setDepot(prev=>prev.map(d=>{
-          if(d.id!==sp.depotId)return d;
-          const price=priceData[sp.ticker];
-          if(!price)return d;
-          const newUnits=d.units+(sp.amount/price);
-          const newAvg=(d.avgPrice*d.units+sp.amount)/newUnits;
-          sb.from('depot').update({units:Math.round(newUnits*10000)/10000,avg_price:Math.round(newAvg*100)/100}).eq('id',d.id);
-          return{...d,units:Math.round(newUnits*10000)/10000,avgPrice:Math.round(newAvg*100)/100};
-        }));
+        // Depot-Update in Pending-Queue speichern (Kurs kommt erst nach dem Laden)
+        try{
+          const pending=JSON.parse(localStorage.getItem("hb_sp_pending")||"[]");
+          if(!pending.some(function(p){return p.depotId===sp.depotId&&p.month===currentMonth;})){
+            pending.push({ticker:sp.ticker,depotId:sp.depotId,amount:sp.amount,month:currentMonth});
+            localStorage.setItem("hb_sp_pending",JSON.stringify(pending));
+          }
+        }catch{}
         currentSparplane=currentSparplane.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
         setSparplans(currentSparplane);
         localStorage.setItem("hb_spar",JSON.stringify(currentSparplane));
@@ -2033,6 +2059,17 @@ function App(){
           }
           setSparplans(list);
           try{localStorage.setItem("hb_spar",JSON.stringify(list));}catch(e){}
+          // Auch in Supabase speichern (subscriptions Tabelle mit SPARPLAN| Prefix)
+          var spEntry=editSpId?list.find(function(s){return s.id===editSpId;}):list[list.length-1];
+          if(spEntry&&user){
+            sb.from('subscriptions').upsert({
+              id:spEntry.id,user_id:user.id,
+              name:"SPARPLAN|"+spEntry.depotId+"|"+spEntry.name,
+              icon:spEntry.ticker,amount:spEntry.amount,
+              category:"Sonstiges",day_of_month:spEntry.dayOfMonth,
+              active:spEntry.active,last_processed:spEntry.lastProcessed||""
+            },{onConflict:'id'}).then(function(r){if(r.error)console.warn("Sparplan Supabase:",r.error.message);});
+          }
           setShowSpDlg(false);
           pop(editSpId?"✅ Gespeichert":"📅 Sparplan eingerichtet!");
           if(!editSpId&&skip)setTimeout(function(){pop("ℹ️ Startet nächsten Monat");},1000);
