@@ -1826,7 +1826,17 @@ function App(){
                         <div style={{fontSize:11,color:C.muted,marginTop:2}}>{d.ticker}</div>
                         {sp&&<div style={{fontSize:11,color:sp.active?C.blue:C.muted,marginTop:4,fontWeight:600}}>
                           {sp.active?"●":"○"} €{fmtAmt(sp.amount)} am {sp.dayOfMonth}. jeden Monat
-                          {sp.lastProcessed&&<span style={{marginLeft:6,opacity:0.6}}>✓ {sp.lastProcessed}</span>}
+                          {(()=>{
+                            const now=new Date();
+                            const cm=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+                            const done=sp.lastProcessed===cm;
+                            const today=now.getDate();
+                            const due=sp.dayOfMonth<=today&&!done;
+                            if(!sp.active)return<span style={{marginLeft:6,color:C.muted,fontSize:10}}>⏸ Pausiert</span>;
+                            if(done)return<span style={{marginLeft:6,color:C.green,fontSize:10,fontWeight:700}}>✅ {cm} ausgeführt</span>;
+                            if(due)return<span style={{marginLeft:6,color:"#f59e0b",fontSize:10,fontWeight:700}}>⚠️ Fällig – App neu laden</span>;
+                            return<span style={{marginLeft:6,color:C.muted,fontSize:10}}>⏳ Am {sp.dayOfMonth}. fällig</span>;
+                          })()}
                         </div>}
                       </div>
                       <div style={{display:"flex",gap:8}}>
