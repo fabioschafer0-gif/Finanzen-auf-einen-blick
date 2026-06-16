@@ -453,42 +453,46 @@ function App(){
   const [authLoading, setAuthLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // Pending Sparplan-Depot-Updates nach Kurs-Laden anwenden
+  // Depot-Update nach Preisladung für ausgeführte Sparpläne
   React.useEffect(()=>{
-    if(!user||Object.keys(priceData).length===0)return;
-    try{
-      const pending=JSON.parse(localStorage.getItem("hb_sp_pending")||"[]");
-      if(pending.length===0)return;
-      const remaining=[];
-      const depotUpdates=[]; // Alle Updates sammeln
-      pending.forEach(function(p){
-        const price=priceData[p.ticker];
-        if(!price){remaining.push(p);return;}
-        const addUnits=Math.round((p.amount/price)*10000)/10000;
-        depotUpdates.push({depotId:p.depotId,addUnits:addUnits,addCost:p.amount,ticker:p.ticker});
+    if(!user||Object.keys(priceData).length===0||subs.length===0)return;
+    const now=new Date();
+    const cm=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+    // Sparpläne die diesen Monat ausgeführt wurden
+    const executedSparplans=subs.filter(s=>
+      s.name&&s.name.startsWith("SPARPLAN|")&&s.last_processed===cm
+    );
+    if(executedSparplans.length===0)return;
+    const updates=[];
+    executedSparplans.forEach(function(s){
+      const parts=s.name.split("|");
+      const depotId=parts[1];
+      const ticker=s.icon;
+      const price=priceData[ticker];
+      if(!price||!depotId)return;
+      const updateKey="hb_du_"+depotId+"_"+cm;
+      if(localStorage.getItem(updateKey))return; // Bereits aktualisiert
+      const addUnits=Math.round((s.amount/price)*10000)/10000;
+      updates.push({depotId,ticker,addUnits,amount:s.amount,updateKey});
+    });
+    if(updates.length===0)return;
+    setDepot(function(prev){
+      var next=prev.map(function(d){
+        var upd=updates.find(function(u){return u.depotId===d.id;});
+        if(!upd)return d;
+        var newUnits=Math.round((d.units+upd.addUnits)*10000)/10000;
+        var newAvg=Math.round(((d.avgPrice*d.units+upd.amount)/newUnits)*100)/100;
+        sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',d.id);
+        return Object.assign({},d,{units:newUnits,avgPrice:newAvg});
       });
-      if(depotUpdates.length>0){
-        // Einmaliger setDepot-Aufruf mit allen Updates
-        setDepot(function(prev){
-          var next=prev.map(function(d){
-            var upd=depotUpdates.find(function(u){return u.depotId===d.id;});
-            if(!upd)return d;
-            var newUnits=Math.round((d.units+upd.addUnits)*10000)/10000;
-            var newAvg=Math.round(((d.avgPrice*d.units+upd.addCost)/newUnits)*100)/100;
-            // Supabase aktualisieren
-            sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',d.id);
-            return Object.assign({},d,{units:newUnits,avgPrice:newAvg});
-          });
-          try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
-          return next;
-        });
-        depotUpdates.forEach(function(u){
-          pop("📈 "+u.ticker+": +"+u.addUnits+" Anteile für €"+u.addCost+" eingebucht");
-        });
-      }
-      localStorage.setItem("hb_sp_pending",JSON.stringify(remaining));
-    }catch(e){console.warn("Depot-Update Fehler:",e);}
-  },[priceData,user]);
+      try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
+      return next;
+    });
+    updates.forEach(function(u){
+      localStorage.setItem(u.updateKey,"1");
+      pop("📈 "+u.ticker+": +"+u.addUnits.toFixed(4)+" Anteile (€"+u.amount+")");
+    });
+  },[priceData,subs,user]);
 
   const isMobile = windowWidth < 768;
 
@@ -651,7 +655,9 @@ function App(){
       .lte('date',`${currentMonth}-31`);
 
     const alreadyBooked=new Set((existing||[]).filter(e=>(e.note||"").match(/\((Abo|Einnahme)\)$/)).map(e=>e.note));
-    const toBook=activeSubs.filter(s=>!alreadyBooked.has(`${s.name} (Abo)`));
+    // SPARPLAN-Subscriptions: andere Note-Formatierung
+    const getAboNote=s=>s.name.startsWith("SPARPLAN|")?(s.name.split("|")[2]||s.name.split("|")[1])+" Sparplan":s.name+" (Abo)";
+    const toBook=activeSubs.filter(s=>!alreadyBooked.has(getAboNote(s)));
     if(toBook.length===0) return;
 
     const newEntries=toBook.map(s=>{
@@ -659,7 +665,7 @@ function App(){
       const d=`${currentMonth}-${String(Math.min(s.day_of_month,maxDay)).padStart(2,"0")}`;
       // Deterministische ID: abo-[subId]-[monat] -> Datenbank verhindert Duplikate automatisch
       const isIncome=INCOME_CAT.includes(s.category);
-      return{id:`abo-${s.id}-${currentMonth}`,user_id:userId,type:isIncome?"income":"expense",category:s.category,amount:s.amount,note:`${s.name} (${isIncome?"Einnahme":"Abo"})`,date:d};
+      const spNote=getAboNote(s);return{id:`abo-${s.id}-${currentMonth}`,user_id:userId,type:isIncome?"income":"expense",category:s.category,amount:s.amount,note:isIncome?s.name+" (Einnahme)":spNote,date:d};
     });
 
     // upsert mit ignoreDuplicates: existiert die ID schon -> wird ignoriert (kein Duplikat moeglich)
