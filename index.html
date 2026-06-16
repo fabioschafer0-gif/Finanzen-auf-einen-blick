@@ -460,19 +460,32 @@ function App(){
       const pending=JSON.parse(localStorage.getItem("hb_sp_pending")||"[]");
       if(pending.length===0)return;
       const remaining=[];
+      const depotUpdates=[]; // Alle Updates sammeln
       pending.forEach(function(p){
         const price=priceData[p.ticker];
         if(!price){remaining.push(p);return;}
-        setDepot(function(prev){return prev.map(function(d){
-          if(d.id!==p.depotId)return d;
-          const newUnits=Math.round((d.units+(p.amount/price))*10000)/10000;
-          const newAvg=Math.round(((d.avgPrice*d.units+p.amount)/newUnits)*100)/100;
-          sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',d.id)
-            .then(function(){try{localStorage.setItem("hb_depot_bak",JSON.stringify(prev.map(function(x){return x.id===d.id?{...x,units:newUnits,avgPrice:newAvg}:x;})));}catch{}});
-          pop("📈 Depot aktualisiert: +"+newUnits.toFixed(4)+" "+p.ticker);
-          return{...d,units:newUnits,avgPrice:newAvg};
-        });});
+        const addUnits=Math.round((p.amount/price)*10000)/10000;
+        depotUpdates.push({depotId:p.depotId,addUnits:addUnits,addCost:p.amount,ticker:p.ticker});
       });
+      if(depotUpdates.length>0){
+        // Einmaliger setDepot-Aufruf mit allen Updates
+        setDepot(function(prev){
+          var next=prev.map(function(d){
+            var upd=depotUpdates.find(function(u){return u.depotId===d.id;});
+            if(!upd)return d;
+            var newUnits=Math.round((d.units+upd.addUnits)*10000)/10000;
+            var newAvg=Math.round(((d.avgPrice*d.units+upd.addCost)/newUnits)*100)/100;
+            // Supabase aktualisieren
+            sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',d.id);
+            return Object.assign({},d,{units:newUnits,avgPrice:newAvg});
+          });
+          try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
+          return next;
+        });
+        depotUpdates.forEach(function(u){
+          pop("📈 "+u.ticker+": +"+u.addUnits+" Anteile für €"+u.addCost+" eingebucht");
+        });
+      }
       localStorage.setItem("hb_sp_pending",JSON.stringify(remaining));
     }catch(e){console.warn("Depot-Update Fehler:",e);}
   },[priceData,user]);
