@@ -781,14 +781,34 @@ function App(){
     setShowSpDlg(true);
   };
   const saveSp=()=>{
-    if(!spForm.amount||!spForm.dayOfMonth)return;
-    const entry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:parseFloat(String(spForm.amount).replace(",",".")),dayOfMonth:Math.max(1,Math.min(31,parseInt(spForm.dayOfMonth)||1)),active:spForm.active};
-    let updated;
-    if(editSpId){ updated=sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s); pop("✅ Sparplan aktualisiert"); }
-    else { updated=[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:""}]; pop("📅 Sparplan eingerichtet!"); }
-    setSparpläne(updated);
-    localStorage.setItem("hb_spar",JSON.stringify(updated));
-    setShowSpDlg(false);
+    const amt=parseFloat(String(spForm.amount||"").replace(",","."));
+    const day=parseInt(spForm.dayOfMonth)||0;
+    if(!amt||amt<=0){ pop("❌ Bitte Betrag eingeben"); return; }
+    if(!day||day<1||day>31){ pop("❌ Tag muss zwischen 1 und 31 liegen"); return; }
+    if(!spForm.depotId||!spForm.ticker){ pop("❌ Keine ETF-Position ausgewählt"); return; }
+    const entry={
+      name:spForm.name,
+      ticker:spForm.ticker,
+      depotId:spForm.depotId,
+      amount:Math.round(amt*100)/100,
+      dayOfMonth:Math.max(1,Math.min(31,day)),
+      active:spForm.active,
+    };
+    try{
+      let updated;
+      if(editSpId){
+        updated=sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s);
+        pop("✅ Sparplan aktualisiert");
+      } else {
+        updated=[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:""}];
+        pop("📅 Sparplan eingerichtet!");
+      }
+      setSparpläne(updated);
+      localStorage.setItem("hb_spar",JSON.stringify(updated));
+      setShowSpDlg(false);
+    } catch(e){
+      pop("❌ Fehler: "+e.message);
+    }
   };
   const delSp=id=>{
     const updated=sparpläne.filter(s=>s.id!==id);
@@ -803,12 +823,16 @@ function App(){
   };
 
   const autoBookSparpläne=async(userId)=>{
+    // localStorage direkt lesen (vermeidet stale-closure Problem)
+    let currentSparpläne=[];
+    try{currentSparpläne=JSON.parse(localStorage.getItem("hb_spar")||"[]");}catch{}
+    if(currentSparpläne.length===0)return;
     const now=new Date();
     const year=now.getFullYear();
     const mon=String(now.getMonth()+1).padStart(2,"0");
     const currentMonth=`${year}-${mon}`;
     const today=now.getDate();
-    const toBook=sparpläne.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
+    const toBook=currentSparpläne.filter(s=>s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth);
     if(toBook.length===0)return;
     let booked=0;
     for(const sp of toBook){
@@ -831,9 +855,9 @@ function App(){
           sb.from('depot').update({units:Math.round(newUnits*10000)/10000,avg_price:Math.round(newAvg*100)/100}).eq('id',d.id);
           return{...d,units:Math.round(newUnits*10000)/10000,avgPrice:Math.round(newAvg*100)/100};
         }));
-        const updated=sparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
-        setSparpläne(updated);
-        localStorage.setItem("hb_spar",JSON.stringify(updated));
+        currentSparpläne=currentSparpläne.map(s=>s.id===sp.id?{...s,lastProcessed:currentMonth}:s);
+        setSparpläne(currentSparpläne);
+        localStorage.setItem("hb_spar",JSON.stringify(currentSparpläne));
         booked++;
       }
     }
@@ -1975,8 +1999,8 @@ function App(){
           {spForm.active?"● Aktiv":"○ Pausiert"}
         </button>
       </div>
-      <button onClick={saveSp} disabled={!spForm.amount||!spForm.dayOfMonth}
-        style={{width:"100%",padding:15,background:(!spForm.amount||!spForm.dayOfMonth)?C.border:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:(!spForm.amount||!spForm.dayOfMonth)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!spForm.amount||!spForm.dayOfMonth)?C.muted:"#fff"}}>
+      <button onClick={saveSp}
+        style={{width:"100%",padding:15,background:`linear-gradient(135deg,${C.blue},#60a5fa)`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:"#fff"}}>
         ✓ {editSpId?"Sparplan speichern":"Sparplan einrichten"}
       </button>
     </Overlay>}
