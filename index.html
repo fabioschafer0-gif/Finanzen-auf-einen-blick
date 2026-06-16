@@ -420,7 +420,8 @@ function App(){
   const [chartData,    setChartData]   = useState({});
   const [priceLoading, setPriceLoading]= useState({});
   const [lastUpdated,  setLastUpdated] = useState(null);
-  const fileRef       = useRef(null);
+  const fileRef          = useRef(null);
+  const pendingQuickAdd  = useRef(null);  // URL-Params vom iOS Kurzbefehl
   const loadingRef    = useRef(false);   // Verhindert doppeltes Laden
   const bookedRef     = useRef(false);   // Verhindert doppelte Abo-Buchung
   const [form,  setForm]  = useState({type:"expense",category:"",amount:"",note:"",date:todayStr()});
@@ -454,26 +455,44 @@ function App(){
     sb.auth.getSession().then(({data:{session}})=>{
       const u=session?.user??null;
       setUser(u);
-      if(u) loadFromCloud(u.id);
-      else { setLoading(false); }
+      if(u){
+        loadFromCloud(u.id);
+        if(pendingQuickAdd.current){
+          const{amount,type,note,cat}=pendingQuickAdd.current;
+          pendingQuickAdd.current=null;
+          setTimeout(()=>{
+            setForm({type,amount,note,category:cat||autoCategory(note,type),date:todayStr()});
+            setShowAdd(true);
+          },1500);
+        }
+      } else { setLoading(false); }
       setAuthLoading(false);
     });
     const {data:{subscription}} = sb.auth.onAuthStateChange((_ev,session)=>{
       const u=session?.user??null;
       setUser(u);
-      if(u) loadFromCloud(u.id);  // Guard in loadFromCloud verhindert doppeltes Laden
-      else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setSubs([]); loadingRef.current=false; bookedRef.current=false; setLoading(false); }
+      if(u){
+        loadFromCloud(u.id);
+        // iOS Kurzbefehl: Form nach Auth öffnen
+        if(pendingQuickAdd.current){
+          const{amount,type,note,cat}=pendingQuickAdd.current;
+          pendingQuickAdd.current=null;
+          setTimeout(()=>{
+            setForm({type,amount,note,category:cat||autoCategory(note,type),date:todayStr()});
+            setShowAdd(true);
+          },1200);
+        }
+      } else { setEntries([]); setGoals(INIT_GOALS); setDepot([]); setSubs([]); loadingRef.current=false; bookedRef.current=false; setLoading(false); }
     });
+    // iOS Kurzbefehl URL-Parameter merken (werden nach Auth geöffnet)
     const p=new URLSearchParams(window.location.search);
     if(p.get("add")==="1"){
-      const amount=(p.get("amount")||"").replace(",",".");
-      const type=p.get("type")||"expense";
-      const note=p.get("note")||"";
-      const cat=p.get("cat")||autoCategory(note,type);
-      setTimeout(()=>{
-        setForm({type,amount,note,category:cat,date:todayStr()});
-        setShowAdd(true);
-      },600);
+      pendingQuickAdd.current={
+        amount:(p.get("amount")||"").replace(",","."),
+        type:p.get("type")||"expense",
+        note:decodeURIComponent(p.get("note")||""),
+        cat:decodeURIComponent(p.get("cat")||""),
+      };
       window.history.replaceState({},"",window.location.pathname);
     }
     const onResize=()=>setWindowWidth(window.innerWidth);
