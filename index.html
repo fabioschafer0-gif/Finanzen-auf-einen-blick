@@ -2023,12 +2023,14 @@ function App(){
           if(!day||day<1||day>31){pop("❌ Tag 1–31 eingeben");return;}
           const entry={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
           // Wenn der Ausführungstag schon vorbei ist: diesen Monat überspringen
+          // entry hier definieren (fehlte vorher!)
+          const entry2={name:spForm.name,ticker:spForm.ticker,depotId:spForm.depotId,amount:Math.round(amt*100)/100,dayOfMonth:day,active:true};
           const now2=new Date();
           const cm2=`${now2.getFullYear()}-${String(now2.getMonth()+1).padStart(2,"0")}`;
           const skipThisMonth=day<=now2.getDate();
           const updated=editSpId
-            ?sparpläne.map(s=>s.id===editSpId?{...s,...entry}:s)
-            :[...sparpläne,{...entry,id:"sp"+uid(),lastProcessed:skipThisMonth?cm2:""}];
+            ?sparpläne.map(s=>s.id===editSpId?{...s,...entry2}:s)
+            :[...sparpläne,{...entry2,id:"sp"+uid(),lastProcessed:skipThisMonth?cm2:""}];
           if(!editSpId&&skipThisMonth) pop("ℹ️ Startet nächsten Monat – Tag "+day+". ist in diesem Monat schon vergangen");
           setSparpläne(updated);
           try{localStorage.setItem("hb_spar",JSON.stringify(updated));}catch{}
