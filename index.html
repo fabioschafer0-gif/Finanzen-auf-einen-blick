@@ -190,7 +190,7 @@ function Field({label,children}){
 }
 
 // ── DATE GROUPED LIST ───────────────────────────────────────────────────
-function DateGroupedList({entries,onDelete,onDuplicate,isMobile}){
+function DateGroupedList({entries,onDelete,onDuplicate,onEdit,isMobile}){
   const EMOJI_MAP={"Gehalt":"💼","Nebeneinkommen":"💰","Freiberuflich":"🔧","Bonus":"🎁","Miete / Wohnen":"🏠","Lebensmittel":"🛒","Transport":"🚗","Versicherungen":"🛡️","Freizeit":"🎯","Kleidung":"👔","Bildung":"📚","Gesundheit":"❤️","Haushalt":"🏡","Sonstiges":"📝"};
   const fmt=(n)=>n.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtS=(n)=>n.toLocaleString("de-DE",{maximumFractionDigits:0});
@@ -241,8 +241,8 @@ function DateGroupedList({entries,onDelete,onDuplicate,isMobile}){
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontWeight:900,fontSize:14,color:e.type==="income"?"#22c55e":"#f87171",whiteSpace:"nowrap"}}>{e.type==="income"?"+":"-"}€{fmt(e.amount)}</span>
-                    <button onClick={()=>{if(onDuplicate)onDuplicate(e);}} title="Nochmal buchen" style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:12,padding:"2px 5px",opacity:0.6}}>📋</button>
-                        <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"2px 5px",opacity:0.6}}>✕</button>
+                    <button onClick={()=>{if(onEdit)onEdit(e);}} style={{background:"#1e2d45",border:"none",color:"#93c5fd",cursor:"pointer",fontSize:11,padding:"4px 8px",borderRadius:6,fontWeight:600}}>✏️</button>
+                        <button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:16,padding:"4px 6px"}}>✕</button>
                   </div>
                 </div>
               ))}
@@ -432,6 +432,7 @@ function App(){
   const [search,      setSearch]      = useState("");
   const [tagFilter,   setTagFilter]   = useState("");
   const [showQuickBook,setShowQuickBook]=useState(false);
+  const [editEntryId,  setEditEntryId]  = useState(null);
   const [quickCat,    setQuickCat]    = useState("");
   const [showKontoModal,setShowKontoModal]=useState(false);
   const [realBalance, setRealBalance]  = useState(()=>{try{return localStorage.getItem("hb_real_bal")||"";}catch{return "";}});
@@ -453,21 +454,18 @@ function App(){
   const [authLoading, setAuthLoading] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // Depot-Update nach Preisladung für ausgeführte Sparpläne
+  // Depot-Update nach Preisladung
   React.useEffect(()=>{
-    if(!user||Object.keys(priceData).length===0||subs.length===0)return;
+    if(!user||Object.keys(priceData).length===0)return;
     const now=new Date();
     const cm=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
-    // Sparpläne die diesen Monat ausgeführt wurden
-    const executedSparplans=subs.filter(s=>
-      s.name&&s.name.startsWith("SPARPLAN|")&&s.last_processed===cm
-    );
+    // Sparplans aus State die diesen Monat ausgeführt wurden
+    const executedSparplans=sparplans.filter(s=>s.active&&s.lastProcessed===cm);
     if(executedSparplans.length===0)return;
     const updates=[];
     executedSparplans.forEach(function(s){
-      const parts=s.name.split("|");
-      const depotId=parts[1];
-      const ticker=s.icon;
+      const depotId=s.depotId;
+      const ticker=s.ticker;
       const price=priceData[ticker];
       if(!price||!depotId)return;
       const updateKey="hb_du_"+depotId+"_"+cm;
@@ -644,7 +642,8 @@ function App(){
     const currentMonth=`${year}-${mon}`;
     const today=now.getDate();
 
-    const activeSubs=loadedSubs.filter(s=>s.active&&s.day_of_month<=today);
+    // SPARPLAN-Subscriptions separat via autoBookSparplane behandelt
+    const activeSubs=loadedSubs.filter(s=>s.active&&s.day_of_month<=today&&!s.name.startsWith("SPARPLAN|"));
     if(activeSubs.length===0) return;
 
     // Direkt DB abfragen was diesen Monat schon gebucht ist (zuverlaessigste Methode)
@@ -713,6 +712,33 @@ function App(){
   },[depot.length]);
 
   // ── BUCHUNGEN ────────────────────────────────────────────────
+  const saveEntry=async()=>{
+    if(!user){setShowLoginModal(true);return;}
+    if(!form.amount||!form.category)return;
+    const amt=parseFloat(String(form.amount).replace(",","."));
+    if(editEntryId){
+      // Bestehende Buchung updaten
+      const updated={...form,id:editEntryId,amount:amt};
+      setEntries(prev=>{
+        const next=prev.map(e=>e.id===editEntryId?updated:e);
+        try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
+        return next;
+      });
+      setShowAdd(false);
+      setEditEntryId(null);
+      setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
+      const{error}=await sb.from('entries').update({
+        type:updated.type,category:updated.category,
+        amount:updated.amount,note:updated.note||"",date:updated.date
+      }).eq('id',editEntryId).select();
+      if(error) pop("❌ Update-Fehler: "+error.message);
+      else pop("✅ Buchung aktualisiert");
+      return;
+    }
+    // Neue Buchung
+    addEntry();
+  };
+
   const addEntry=async()=>{
     if(!user){setShowLoginModal(true);return;}
     if(!form.amount||!form.category)return;
@@ -880,87 +906,56 @@ function App(){
   };
 
   const autoBookSparplane=async(userId)=>{
-    // Zuerst localStorage, dann als Fallback den übergebenen State
-    let currentSp=[];
-    try{
-      const lsData=localStorage.getItem("hb_spar");
-      if(lsData) currentSp=JSON.parse(lsData);
-    }catch{}
-    // Fallback: Supabase-Daten aus dem Argument nutzen
-    if(currentSp.length===0&&sparplans&&sparplans.length>0){
-      currentSp=sparplans;
-      try{localStorage.setItem("hb_spar",JSON.stringify(currentSp));}catch{}
-    }
-    if(currentSp.length===0)return;
+    // Sparplane aus localStorage oder State lesen
+    let sparplanList=[];
+    try{const ls=localStorage.getItem("hb_spar");if(ls)sparplanList=JSON.parse(ls);}catch{}
+    if(!sparplanList.length&&sparplans.length)sparplanList=sparplans;
+    if(!sparplanList.length)return;
     const now=new Date();
     const year=now.getFullYear();
     const mon=String(now.getMonth()+1).padStart(2,"0");
     const currentMonth=year+"-"+mon;
-    const today=now.getDate();
-    const toBook=currentSp.filter(function(s){return s.active&&s.dayOfMonth<=today&&s.lastProcessed!==currentMonth;});
-    if(toBook.length===0)return;
-    let deletedBl=new Set();
-    try{deletedBl=new Set(JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]"));}catch{}
+    const today2=now.getDate();
+    const toBook=sparplanList.filter(s=>s.active&&s.dayOfMonth<=today2&&s.lastProcessed!==currentMonth);
+    if(!toBook.length)return;
+    let deletedIds=new Set();
+    try{deletedIds=new Set(JSON.parse(localStorage.getItem("hb_deleted_ids")||"[]"));}catch{}
     let booked=0;
     for(var i=0;i<toBook.length;i++){
       var sp=toBook[i];
       var maxDay=new Date(year,now.getMonth()+1,0).getDate();
-      var d=currentMonth+"-"+String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0");
+      var bookDate=currentMonth+"-"+String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0");
       var entryId="sparplan-"+sp.id+"-"+currentMonth;
-      // Blacklist: wenn bewusst gelöscht, überspringen
-      if(deletedBl.has(entryId)){
-        currentSp=currentSp.map(function(s){return s.id===sp.id?Object.assign({},s,{lastProcessed:currentMonth}):s;});
-        setSparplans(currentSp);
-        try{localStorage.setItem("hb_spar",JSON.stringify(currentSp));}catch{}
+      if(deletedIds.has(entryId)){
+        sparplanList=sparplanList.map(s=>s.id===sp.id?Object.assign({},s,{lastProcessed:currentMonth}):s);
         continue;
       }
-      // 1. Buchung eintragen
-      var upsertResult=await sb.from('entries').upsert(
-        {id:entryId,user_id:userId,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:d},
+      // Buchung erstellen
+      var res=await sb.from('entries').upsert(
+        {id:entryId,user_id:userId,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:bookDate},
         {onConflict:'id',ignoreDuplicates:true}
       );
-      if(upsertResult.error){continue;}
-      // 2. Entry in State hinzufügen (erscheint sofort in Buchungen-Tab)
+      if(res.error)continue;
+      // In State einfügen (erscheint in Buchungen)
+      var eNew={id:entryId,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:bookDate};
       setEntries(function(prev){
-        if(prev.some(function(e){return e.id===entryId;}))return prev;
-        var next=prev.concat([{id:entryId,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:d}]);
+        if(prev.some(function(x){return x.id===entryId;}))return prev;
+        var next=prev.concat([eNew]);
         try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
         return next;
       });
-      // 3. ETF-Position aktualisieren: Preis von API holen
-      try{
-        var priceRes=await fetch('/api/price?ticker='+encodeURIComponent(sp.ticker));
-        if(priceRes.ok){
-          var priceJson=await priceRes.json();
-          var price=priceJson&&priceJson.chart&&priceJson.chart.result&&priceJson.chart.result[0]
-            ?(priceJson.chart.result[0].meta.regularMarketPrice||priceJson.chart.result[0].meta.previousClose)
-            :0;
-          if(price>0){
-            var addUnits=Math.round((sp.amount/price)*10000)/10000;
-            setDepot(function(prev){
-              var next=prev.map(function(de){
-                if(de.id!==sp.depotId)return de;
-                var newUnits=Math.round((de.units+addUnits)*10000)/10000;
-                var newAvg=Math.round(((de.avgPrice*de.units+sp.amount)/newUnits)*100)/100;
-                sb.from('depot').update({units:newUnits,avg_price:newAvg}).eq('id',de.id);
-                return Object.assign({},de,{units:newUnits,avgPrice:newAvg});
-              });
-              try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
-              return next;
-            });
-            pop("📈 "+sp.name+": +"+addUnits+" Anteile @ €"+price.toFixed(2));
-          }
-        }
-      }catch(priceErr){console.warn("Preis-Abruf fehlgeschlagen:",priceErr);}
-      // 4. lastProcessed setzen
-      currentSp=currentSp.map(function(s){return s.id===sp.id?Object.assign({},s,{lastProcessed:currentMonth}):s;});
-      setSparplans(currentSp);
-      try{localStorage.setItem("hb_spar",JSON.stringify(currentSp));}catch{}
-      // Auch Supabase subscription aktualisieren
+      // lastProcessed setzen
+      sparplanList=sparplanList.map(s=>s.id===sp.id?Object.assign({},s,{lastProcessed:currentMonth}):s);
+      setSparplans(sparplanList);
+      try{localStorage.setItem("hb_spar",JSON.stringify(sparplanList));}catch{}
       sb.from('subscriptions').update({last_processed:currentMonth}).eq('id',sp.id);
       booked++;
     }
-    if(booked>0)setTimeout(function(){pop("📅 "+booked+" Sparplan-Buchung"+(booked>1?"en":"")+" ausgeführt!");},600);
+    if(booked>0){
+      pop("📅 "+booked+" Sparplan"+(booked>1?"buchungen":"buchung")+" erstellt");
+      // Preise neu laden um Depot zu aktualisieren
+      setTimeout(function(){try{fetchAllPrices();}catch{}},1000);
+    }
   };
 
   // ── ZIELE ────────────────────────────────────────────────────
@@ -1550,7 +1545,10 @@ function App(){
                   <div style={{fontWeight:600,fontSize:15}}>{search?"Keine Treffer für „"+search+"“":"Noch keine Buchungen"}</div>
                   {!search&&<div style={{fontSize:12,marginTop:6}}>Manuell hinzufügen oder CSV importieren</div>}
                 </div>
-                :<DateGroupedList entries={filtered} onDelete={delEntry} onDuplicate={e=>{setForm({type:e.type,category:e.category,amount:String(e.amount),note:e.note||"",date:todayStr()});setShowAdd(true);}} isMobile={isMobile}/>;
+                :<DateGroupedList entries={filtered} onDelete={delEntry}
+                onDuplicate={e=>{setForm({type:e.type,category:e.category,amount:String(e.amount),note:e.note||"",date:todayStr()});setEditEntryId(null);setShowAdd(true);}}
+                onEdit={e=>{setEditEntryId(e.id);setForm({type:e.type,category:e.category,amount:String(e.amount),note:e.note||"",date:e.date||todayStr()});setShowAdd(true);}}
+                isMobile={isMobile}/>;
             })()}
           </>}
 
@@ -2064,7 +2062,7 @@ function App(){
     </Overlay>}
 
     {/* Buchung hinzufügen */}
-    {showAdd&&<Overlay title="Buchung hinzufügen" onClose={()=>setShowAdd(false)}>
+    {showAdd&&<Overlay title={editEntryId?"Buchung bearbeiten":"Buchung hinzufügen"} onClose={()=>{setShowAdd(false);setEditEntryId(null);setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
         {["expense","income"].map(t=><button key={t} onClick={()=>setForm(f=>({...f,type:t,category:""}))} style={{padding:"12px 0",borderRadius:10,border:`2px solid ${form.type===t?(t==="expense"?C.red:C.green):C.border}`,background:form.type===t?(t==="expense"?"#200d0d":"#0d200d"):"transparent",color:form.type===t?(t==="expense"?C.red:C.green):C.muted,cursor:"pointer",fontWeight:700,fontSize:13}}>{t==="expense"?"📤 Ausgabe":"📥 Einnahme"}</button>)}
       </div>
@@ -2080,7 +2078,7 @@ function App(){
         <div style={{fontSize:10,color:C.muted,marginTop:4}}>Tipp: #hashtags für spätere Filterung</div>
       </Field>
       <Field label="Datum"><input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={IS}/></Field>
-      <button onClick={addEntry} disabled={!form.amount||!form.category} style={{width:"100%",padding:15,marginTop:14,background:(!form.amount||!form.category)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!form.amount||!form.category)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!form.amount||!form.category)?C.muted:"#080e1a"}}>✓ Speichern</button>
+      <button onClick={saveEntry} disabled={!form.amount||!form.category} style={{width:"100%",padding:15,marginTop:14,background:(!form.amount||!form.category)?C.border:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:(!form.amount||!form.category)?"not-allowed":"pointer",fontWeight:800,fontSize:15,color:(!form.amount||!form.category)?C.muted:"#080e1a"}}>✓ Speichern</button>
     </Overlay>}
 
     {/* Ziel Modal */}
