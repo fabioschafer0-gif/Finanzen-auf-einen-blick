@@ -549,10 +549,10 @@ function App(){
     setLoading(true);
     try{
       const [eR,gR,dR,sR]=await Promise.all([
-        sb.from('entries').select('*').eq('user_id',userId),
-        sb.from('goals').select('*').eq('user_id',userId),
-        sb.from('depot').select('*').eq('user_id',userId),
-        sb.from('subscriptions').select('*').eq('user_id',userId)
+        sb.from('entries').select('*'),
+        sb.from('goals').select('*'),
+        sb.from('depot').select('*'),
+        sb.from('subscriptions').select('*')
       ]);
 
       // Explizite Fehlerprüfung
@@ -649,7 +649,7 @@ function App(){
     // Direkt DB abfragen was diesen Monat schon gebucht ist (zuverlaessigste Methode)
     const {data:existing}=await sb.from('entries')
       .select('note')
-      .eq('user_id',userId)
+      
       .gte('date',`${currentMonth}-01`)
       .lte('date',`${currentMonth}-31`);
 
