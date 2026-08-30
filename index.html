@@ -952,7 +952,7 @@ function App(){
       booked++;
     }
     if(booked>0){
-      pop("📅 "+booked+" Sparplan"+(booked>1?"buchungen":"buchung")+" erstellt");
+      console.error("📅 "+booked+" Sparplan"+(booked>1?"buchungen":"buchung")+" erstellt");
       // Preise neu laden um Depot zu aktualisieren
       setTimeout(function(){try{fetchAllPrices();}catch{}},1000);
     }
