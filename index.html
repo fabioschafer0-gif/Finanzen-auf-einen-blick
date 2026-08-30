@@ -713,7 +713,7 @@ function App(){
 
   // ── BUCHUNGEN ────────────────────────────────────────────────
   const saveEntry=async()=>{
-    if(!user){setShowLoginModal(true);return;}
+    
     if(!form.amount||!form.category)return;
     const amt=parseFloat(String(form.amount).replace(",","."));
     if(editEntryId){
@@ -740,7 +740,7 @@ function App(){
   };
 
   const addEntry=async()=>{
-    if(!user){setShowLoginModal(true);return;}
+    
     if(!form.amount||!form.category)return;
     const e={...form,id:uid(),amount:parseFloat(form.amount)};
     // 1. Sofort in State + localStorage
@@ -753,7 +753,7 @@ function App(){
     setForm({type:"expense",category:"",amount:"",note:"",date:todayStr()});
     // 2. Supabase awaited mit Verifikation
     const{data:saved,error}=await sb.from('entries')
-      .insert({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
+      .insert({id:e.id,user_id:user?.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})
       .select();
     if(error){
       pop("❌ DB-Fehler: "+error.message);
@@ -806,7 +806,7 @@ function App(){
   const openNewSub=()=>{setEditSubId(null);setSForm({name:"",icon:"🔄",amount:"",category:"Freizeit",day_of_month:"1",active:true,sub_type:"expense"});setShowSubDlg(true);};
   const openEditSub=s=>{setEditSubId(s.id);setSForm({name:s.name,icon:s.icon,amount:String(s.amount),category:s.category,day_of_month:String(s.day_of_month),active:s.active,sub_type:INCOME_CAT.includes(s.category)?"income":"expense"});setShowSubDlg(true);};
   const saveSub=()=>{
-    if(!user){setShowLoginModal(true);return;}
+    
     if(!sForm.name||!sForm.amount)return;
     // Duplikat-Schutz: Abo mit gleichem Namen schon vorhanden?
     if(!editSubId&&subs.some(s=>s.name.toLowerCase()===sForm.name.toLowerCase())){
@@ -819,12 +819,12 @@ function App(){
     if(editSubId){
       const upd={...entry,id:editSubId};
       setSubs(prev=>prev.map(s=>s.id===editSubId?upd:s));
-      sb.from('subscriptions').upsert({id:upd.id,user_id:user.id,...entry}).then(({error})=>{if(error)pop("❌ "+error.message);});
+      sb.from('subscriptions').upsert({id:upd.id,user_id:user?.id,...entry}).then(({error})=>{if(error)pop("❌ "+error.message);});
       pop("✅ Abo aktualisiert");
     } else {
       const ns={id:"sub"+uid(),...entry,last_processed:""};
       setSubs(prev=>[...prev,ns]);
-      sb.from('subscriptions').insert({id:ns.id,user_id:user.id,...entry,last_processed:""})
+      sb.from('subscriptions').insert({id:ns.id,user_id:user?.id,...entry,last_processed:""})
         .then(({error})=>{if(error){setSubs(prev=>prev.filter(s=>s.id!==ns.id));pop("❌ "+error.message);}});
       pop("🔄 Abo hinzugefügt!");
     }
@@ -962,17 +962,17 @@ function App(){
   const openNew=()=>{setEditId(null);setGForm({name:"",icon:"🏠",color:"#c9a227",target:"",saved:""});setShowGoalDlg(true);};
   const openEdit=g=>{setEditId(g.id);setGForm({name:g.name,icon:g.icon,color:g.color,target:String(g.target),saved:String(g.saved)});setShowGoalDlg(true);};
   const saveGoal=()=>{
-    if(!user){setShowLoginModal(true);return;}
+    
     if(!gForm.name||!gForm.target)return;
     if(editId){
       const upd={id:editId,...gForm,target:parseFloat(gForm.target),saved:gForm.saved!==""?parseFloat(gForm.saved):goals.find(g=>g.id===editId)?.saved||0};
       setGoals(prev=>prev.map(g=>g.id===editId?upd:g));
-      sb.from('goals').upsert({id:upd.id,user_id:user.id,name:upd.name,icon:upd.icon,color:upd.color,target:upd.target,saved:upd.saved});
+      sb.from('goals').upsert({id:upd.id,user_id:user?.id,name:upd.name,icon:upd.icon,color:upd.color,target:upd.target,saved:upd.saved});
       pop("✅ Ziel aktualisiert");
     } else {
       const ng={id:"g"+uid(),...gForm,target:parseFloat(gForm.target),saved:gForm.saved?parseFloat(gForm.saved):0};
       setGoals(prev=>[...prev,ng]);
-      sb.from('goals').insert({id:ng.id,user_id:user.id,name:ng.name,icon:ng.icon,color:ng.color,target:ng.target,saved:ng.saved})
+      sb.from('goals').insert({id:ng.id,user_id:user?.id,name:ng.name,icon:ng.icon,color:ng.color,target:ng.target,saved:ng.saved})
         .then(({error})=>{if(error) pop("❌ "+error.message);});
       pop("🎯 Neues Ziel!");
     }
@@ -998,7 +998,7 @@ function App(){
   const openNewDepot=()=>{setEditDepotId(null);setDForm({name:"",ticker:"",units:"",avgPrice:""});setShowDepotDlg(true);};
   const openEditDepot=etf=>{setEditDepotId(etf.id);setDForm({name:etf.name,ticker:etf.ticker,units:String(etf.units),avgPrice:String(etf.avgPrice)});setShowDepotDlg(true);};
   const saveDepotEntry=async()=>{
-    if(!user){setShowLoginModal(true);return;}
+    
     if(!dForm.name||!dForm.ticker||!dForm.units||!dForm.avgPrice)return;
     setShowDepotDlg(false);
     const entry={name:dForm.name,ticker:dForm.ticker.toUpperCase().trim(),units:parseFloat(dForm.units),avgPrice:parseFloat(String(dForm.avgPrice).replace(",","."))};
@@ -1009,7 +1009,7 @@ function App(){
         try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
         return next;
       });
-      const{error}=await sb.from('depot').upsert({id:upd.id,user_id:user.id,name:upd.name,ticker:upd.ticker,units:upd.units,avg_price:upd.avgPrice}).select();
+      const{error}=await sb.from('depot').upsert({id:upd.id,user_id:user?.id,name:upd.name,ticker:upd.ticker,units:upd.units,avg_price:upd.avgPrice}).select();
       if(error) pop("❌ Supabase: "+error.message);
       else pop("✅ Position aktualisiert");
     } else {
@@ -1019,7 +1019,7 @@ function App(){
         try{localStorage.setItem("hb_depot_bak",JSON.stringify(next));}catch{}
         return next;
       });
-      const{data:saved,error}=await sb.from('depot').insert({id:ni.id,user_id:user.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice}).select();
+      const{data:saved,error}=await sb.from('depot').insert({id:ni.id,user_id:user?.id,name:ni.name,ticker:ni.ticker,units:ni.units,avg_price:ni.avgPrice}).select();
       if(error) pop("❌ Supabase: "+error.message);
       else if(!saved||saved.length===0) pop("⚠️ Gespeichert aber nicht lesbar – RLS prüfen");
       else pop("💹 ETF hinzugefügt!");
@@ -1068,14 +1068,14 @@ function App(){
       const type=amt>=0?"income":"expense";
       return{id:uid(),date:parseDate(row[csvMap.date]||""),amount:Math.abs(amt),type,note,category:autoCategory(note,type)};
     }).filter(Boolean);
-    if(!user){setShowLoginModal(true);return;}
+    
     setEntries(prev=>{
       const next=[...prev,...newE];
       try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}
       return next;
     });
-    if(newE.length>0&&user){
-      sb.from('entries').upsert(newE.map(e=>({id:e.id,user_id:user.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})),{onConflict:'id',ignoreDuplicates:true})
+    if(newE.length>0){
+      sb.from('entries').upsert(newE.map(e=>({id:e.id,user_id:user?.id,type:e.type,category:e.category,amount:e.amount,note:e.note||"",date:e.date})),{onConflict:'id',ignoreDuplicates:true})
         .then(({error})=>{if(error) console.warn("Import-Sync:",error.message);});
     }
     setShowImport(false);setCsvStep("upload");setCsvRaw([]);setCsvHeaders([]);
@@ -1231,7 +1231,7 @@ function App(){
           {isMobile&&<div>
             {user
               ?<button onClick={()=>sb.auth.signOut()} style={{width:36,height:36,borderRadius:"50%",background:C.gold,border:"none",fontSize:14,fontWeight:900,color:"#080e1a",cursor:"pointer"}}>{(user.email||user.user_metadata?.user_name||"U")[0].toUpperCase()}</button>
-              :<button onClick={()=>setShowLoginModal(true)} style={{background:C.gold,border:"none",color:"#080e1a",fontSize:12,padding:"8px 14px",borderRadius:9,cursor:"pointer",fontWeight:800}}>Anmelden</button>
+              :null
             }
           </div>}
           {!isMobile&&<div style={{display:"flex",gap:10}}>
@@ -1245,7 +1245,7 @@ function App(){
                 </div>
                 <button onClick={()=>sb.auth.signOut()} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",borderRadius:9,cursor:"pointer",fontWeight:500}}>Abmelden</button>
               </div>
-              :<button onClick={()=>setShowLoginModal(true)} style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 18px",borderRadius:9,cursor:"pointer",fontWeight:800}}>👤 Anmelden</button>
+              :null
             }
             <button onClick={openNew}    style={{background:C.gold,border:"none",color:"#080e1a",fontSize:13,padding:"8px 16px",borderRadius:9,cursor:"pointer",fontWeight:700}}>+ Neues Ziel</button>
           </div>}
@@ -1943,7 +1943,7 @@ function App(){
                         <button onClick={()=>sp?openEditSp(sp):openNewSp(d)} style={{background:C.border,border:"none",color:sp?C.blue:C.gold,fontSize:11,padding:"5px 10px",borderRadius:7,cursor:"pointer",fontWeight:700}}>
                           {sp?"✏️":"+ Sparplan"}
                         </button>
-                        {sp&&user&&<button onClick={async()=>{
+                        {sp&&<button onClick={async()=>{
                           pop("⏳ Wird ausgeführt...");
                           // Sparplan manuell ausführen
                           const now=new Date();
@@ -1954,7 +1954,7 @@ function App(){
                           const date=currentMonth+"-"+String(Math.min(sp.dayOfMonth,maxDay)).padStart(2,"0");
                           const entryId="sparplan-"+sp.id+"-"+currentMonth;
                           const{error}=await sb.from('entries').upsert(
-                            {id:entryId,user_id:user.id,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:date},
+                            {id:entryId,user_id:user?.id,type:"expense",category:"Sonstiges",amount:sp.amount,note:sp.name+" Sparplan",date:date},
                             {onConflict:'id',ignoreDuplicates:true}
                           );
                           if(error){pop("❌ Buchung fehlgeschlagen: "+error.message);return;}
@@ -2162,7 +2162,7 @@ function App(){
           var spEntry=editSpId?list.find(function(s){return s.id===editSpId;}):list[list.length-1];
           if(spEntry&&user){
             sb.from('subscriptions').upsert({
-              id:spEntry.id,user_id:user.id,
+              id:spEntry.id,user_id:user?.id,
               name:"SPARPLAN|"+spEntry.depotId+"|"+spEntry.name,
               icon:spEntry.ticker,amount:spEntry.amount,
               category:"Sonstiges",day_of_month:spEntry.dayOfMonth,
@@ -2262,7 +2262,7 @@ function App(){
         const e={type:"expense",category:quickCat,amount:amt,note,date:todayStr(),id:uid()};
         setEntries(prev=>{const next=[...prev,e];try{localStorage.setItem("hb_entries_bak",JSON.stringify(next));}catch{}return next;});
         setShowQuickBook(false);
-        const{error}=await sb.from('entries').insert({...e,user_id:user.id}).select();
+        const{error}=await sb.from('entries').insert({...e,user_id:user?.id}).select();
         if(error) pop("❌ "+error.message);
         else pop("✅ "+quickCat+" – €"+amt.toFixed(2)+" gespeichert");
       }} style={{width:"100%",padding:15,background:`linear-gradient(135deg,${C.gold},${C.goldLight})`,border:"none",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,color:"#080e1a"}}>
