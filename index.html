@@ -498,8 +498,8 @@ function App(){
     sb.auth.getSession().then(({data:{session}})=>{
       const u=session?.user??null;
       setUser(u);
-      if(u){
-        loadFromCloud(u.id);
+      if(true){
+        loadFromCloud(u?.id);
         if(pendingQuickAdd.current){
           const{amount,type,note,cat}=pendingQuickAdd.current;
           pendingQuickAdd.current=null;
@@ -514,8 +514,8 @@ function App(){
     const {data:{subscription}} = sb.auth.onAuthStateChange((_ev,session)=>{
       const u=session?.user??null;
       setUser(u);
-      if(u){
-        loadFromCloud(u.id);
+      if(true){
+        loadFromCloud(u?.id);
         // iOS Kurzbefehl: Form nach Auth öffnen
         if(pendingQuickAdd.current){
           const{amount,type,note,cat}=pendingQuickAdd.current;
