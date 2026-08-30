@@ -628,7 +628,7 @@ function App(){
       setSubs(loadedSubs);
       await autoBookSubs(userId,loadedSubs,loadedEntries);
       await autoBookSparplane(userId);
-    }catch(e){console.error("loadFromCloud:",e);pop("❌ Ladefehler: "+e.message);}
+    }catch(e){console.error("loadFromCloud:",e);console.error("❌ Ladefehler: "+e.message);}
     setLoading(false);
     loadingRef.current=false;
   };
